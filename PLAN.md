@@ -745,7 +745,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.2: Clock and text-only orchestrator
 
-- [ ] Media clock, lockstep loop, session lifecycle, `ModelAdapter`, scripted `mock`, scripted counterpart.
+- [x] Media clock, lockstep loop, session lifecycle, `ModelAdapter`, scripted `mock`, scripted counterpart.
 - **Run:** `uv run lambda-duplex run --suite _inline_echo --model mock --mode text --ticks 50`
 - **Test:** `pytest tests/orchestrator` covers tick order, one-tick audibility delay, timeout and clean shutdown after an adapter error.
 - **Done when:** a 50-tick conversation prints the same event order every time.
