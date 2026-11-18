@@ -18,6 +18,18 @@ import yaml
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
 from lambda_duplex.counterpart.errors import NoiseAssetError
+from lambda_duplex.judges import (
+    JudgeConfig,
+    JudgeError,
+    JudgeRubric,
+    RubricError,
+    create_provider,
+    judge_run,
+    resolve_rubric,
+    shuffled_runs,
+)
+from lambda_duplex.judges.rubric import is_rubric_path
+from lambda_duplex.judges.runner import DEFAULT_MODELS, PROVIDERS
 from lambda_duplex.metrics.conversation import (
     ConversationTimeline,
     conversation_metrics,
@@ -565,6 +577,61 @@ def _replay(args: argparse.Namespace) -> int:
     return 0 if healthy else 1
 
 
+def _judge_rubric(
+    args: argparse.Namespace, path: Path, rubrics: dict[str, JudgeRubric]
+) -> JudgeRubric:
+    if is_rubric_path(args.rubric):
+        reference = ""
+    else:
+        reference = args.suite or load_run(path).manifest["suite"]["reference"]
+    if reference not in rubrics:
+        root = load_suite(reference).root if reference else None
+        rubrics[reference] = resolve_rubric(args.rubric, root)
+    return rubrics[reference]
+
+
+def _judge(args: argparse.Namespace) -> int:
+    if args.retries < 0:
+        print("--retries must not be negative", file=sys.stderr)
+        return 2
+    paths = find_run_dirs(args.path)
+    if not paths:
+        print(f"no runs found in {args.path}", file=sys.stderr)
+        return 2
+    provider = create_provider(args.provider)
+    model = args.model or DEFAULT_MODELS[args.provider]
+    rubrics: dict[str, JudgeRubric] = {}
+    healthy = True
+    for path in shuffled_runs(paths, args.seed, args.rubric):
+        try:
+            config = JudgeConfig(
+                _judge_rubric(args, path, rubrics),
+                args.provider,
+                provider,
+                model,
+                seed=args.seed,
+                retries=args.retries,
+                refresh=args.refresh,
+                blind_terms=tuple(args.blind_term),
+            )
+            outcome = asyncio.run(judge_run(path, config))
+        except (JudgeError, RubricError, SuiteError, TrajectoryError) as error:
+            print(f"{path}: {error}", file=sys.stderr)
+            return 2
+        record = outcome.record
+        healthy = healthy and record["status"] != "failed"
+        scores = " ".join(f"{item['id']}={item['score']}" for item in record["items"])
+        summary = (
+            f"{path}: status={record['status']} attempts={record['attempts']} "
+            f"provider_calls={outcome.provider_calls} cache_hits={outcome.cache_hits}"
+        )
+        print(f"{summary} {scores}".rstrip())
+        for problem in record["errors"]:
+            print(f"  {problem}")
+    print("judge scores are non-deterministic and stored apart from results in judges.jsonl")
+    return 0 if healthy else 1
+
+
 def _suites(args: argparse.Namespace) -> int:
     if args.suites_command == "list":
         for name in list_suites():
@@ -689,6 +756,18 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--verify", action="store_true", help="rescore and replay the run")
     replay.add_argument("--suite", help="suite to use instead of the stored reference")
     replay.add_argument("--noise-dir", type=Path, help="installed noise recordings")
+    judge = commands.add_parser("judge", help="score stored runs with a rubric judge")
+    judge.add_argument("path", type=Path)
+    judge.add_argument("--rubric", required=True, help="rubric id or YAML file")
+    judge.add_argument("--provider", required=True, choices=PROVIDERS)
+    judge.add_argument("--model", help="judge model name")
+    judge.add_argument("--suite", help="suite to use instead of the stored reference")
+    judge.add_argument("--seed", type=int, default=0, help="seed for blinded ordering")
+    judge.add_argument("--retries", type=int, default=2, help="extra attempts after a failure")
+    judge.add_argument("--refresh", action="store_true", help="ignore cached judge replies")
+    judge.add_argument(
+        "--blind-term", action="append", default=[], help="extra text to hide from the judge"
+    )
     suites = commands.add_parser("suites", help="list or validate suites")
     suite_commands = suites.add_subparsers(dest="suites_command", required=True)
     suite_commands.add_parser("list", help="list available suites")
@@ -732,6 +811,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.verify:
             parser.error("replay currently requires --verify")
         return _replay(args)
+    if args.command == "judge":
+        return _judge(args)
     if args.command == "suites":
         return _suites(args)
     parser.print_help()

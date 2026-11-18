@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
 
-GatewayMode = Literal["off", "record", "replay"]
+GatewayMode = Literal["off", "record", "replay", "cache"]
 
 
 class LLMDisabledError(RuntimeError):
@@ -63,7 +63,7 @@ class FakeProvider:
 
 
 class LLMGateway:
-    """Record calls, replay calls, or reject them."""
+    """Record calls, replay calls, serve them from a cache, or reject them."""
 
     def __init__(
         self,
@@ -71,8 +71,8 @@ class LLMGateway:
         provider: LLMProvider | None = None,
         entries: Iterable[Mapping[str, Any]] = (),
     ) -> None:
-        if mode == "record" and provider is None:
-            raise ValueError("record mode requires a provider")
+        if mode in ("record", "cache") and provider is None:
+            raise ValueError(f"{mode} mode requires a provider")
         self.mode = mode
         self._provider = provider
         self._entries = [dict(entry) for entry in entries]
@@ -88,19 +88,23 @@ class LLMGateway:
             raise LLMDisabledError(f"LLM calls are disabled ({request.purpose})")
         key = request.key()
         occurrence = self._seen[key]
-        self._seen[key] += 1
-        if self.mode == "replay":
-            entry = self._lookup.get((key, occurrence))
-            if entry is None:
+        if self.mode in ("replay", "cache"):
+            cached = self._lookup.get((key, occurrence))
+            if cached is not None:
+                self._seen[key] += 1
+                return LLMResponse(**cached["response"])
+            if self.mode == "replay":
                 raise ReplayMissError(f"no recorded response for {request.purpose}")
-            return LLMResponse(**entry["response"])
         assert self._provider is not None
         response = await self._provider.complete(request)
+        self._seen[key] += 1
         entry = {
             "key": key,
             "occurrence": occurrence,
             "request": asdict(request),
             "response": asdict(response),
         }
-        self._entries.append(json.loads(json.dumps(entry, allow_nan=False)))
+        stored = json.loads(json.dumps(entry, allow_nan=False))
+        self._entries.append(stored)
+        self._lookup[(key, occurrence)] = stored
         return response

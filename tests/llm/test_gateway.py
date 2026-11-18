@@ -15,6 +15,41 @@ from lambda_duplex.llm import (
 REQUEST = LLMRequest("fake", ({"role": "user", "content": "hi"},), "test", {"temperature": 0})
 
 
+def test_cache_mode_serves_known_calls_and_records_new_ones() -> None:
+    first = LLMGateway("cache", FakeProvider(lambda request, call: "stored"))
+    assert asyncio.run(first.complete(REQUEST)).text == "stored"
+    provider = FakeProvider(lambda request, call: "new")
+
+    second = LLMGateway("cache", provider, first.entries)
+
+    assert asyncio.run(second.complete(REQUEST)).text == "stored"
+    assert provider.calls == 0
+    assert asyncio.run(second.complete(REQUEST)).text == "new"
+    assert [entry["occurrence"] for entry in second.entries] == [0, 1]
+
+
+def test_cache_mode_requires_a_provider() -> None:
+    with pytest.raises(ValueError, match="cache mode"):
+        LLMGateway("cache")
+
+
+def test_failed_call_does_not_use_up_an_occurrence() -> None:
+    def respond(request: LLMRequest, call: int) -> str:
+        if not attempts:
+            attempts.append(1)
+            raise OSError("reset")
+        return "ok"
+
+    attempts: list[int] = []
+    gateway = LLMGateway("record", FakeProvider(respond))
+    with pytest.raises(OSError, match="reset"):
+        asyncio.run(gateway.complete(REQUEST))
+
+    asyncio.run(gateway.complete(REQUEST))
+
+    assert gateway.entries[0]["occurrence"] == 0
+
+
 def test_record_then_replay_keeps_repeated_call_order() -> None:
     provider = FakeProvider(lambda request, call: f"answer {call}")
     recorder = LLMGateway("record", provider)
