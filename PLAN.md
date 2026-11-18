@@ -761,8 +761,8 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.4: Trajectories and LLM gateway
 
-- [ ] Run directory, schemas, atomic writes, seeded random streams.
-- [ ] LLM gateway with `record`, `replay` and `off`, plus a fake provider.
+- [x] Run directory, schemas, atomic writes, seeded random streams.
+- [x] LLM gateway with `record`, `replay` and `off`, plus a fake provider.
 - **Run:** `uv run lambda-duplex run --suite demo --model mock --mode text --out runs/demo && uv run lambda-duplex replay runs/demo --verify`
 - **Test:** `pytest tests/trajectory tests/llm` checks R1 and R2, and that a replay cache miss fails loudly.
 - **Done when:** replay reports identical events and metrics.

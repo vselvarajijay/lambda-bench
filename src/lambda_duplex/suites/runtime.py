@@ -12,6 +12,7 @@ from typing import Any
 
 from lambda_duplex.adapters.base import MediaFrame, ModelAdapter
 from lambda_duplex.adapters.mock import MockAdapter
+from lambda_duplex.llm import LLMGateway
 from lambda_duplex.orchestrator import (
     DrainedEvent,
     MediaClock,
@@ -164,9 +165,12 @@ async def run_scenario(
     seed: int = 0,
     max_ticks: int = 200,
     condition: str | None = None,
+    llm: LLMGateway | None = None,
 ) -> ScenarioRun:
     """Run and score one scenario."""
-    context = RunContext(seed, condition or suite.manifest.default_condition)
+    context = RunContext(
+        seed, condition or suite.manifest.default_condition, llm=llm or LLMGateway()
+    )
     config = OrchestratorConfig(max_ticks=max_ticks, seed=seed)
     policy = suite.create_policy(copy.deepcopy(scenario), context)
     counterpart = PolicyCounterpart(policy, config.tick_ms)
