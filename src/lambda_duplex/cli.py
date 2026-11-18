@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import json
 import platform
@@ -11,6 +12,9 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 
 from lambda_duplex import __version__
+from lambda_duplex.adapters.mock import MockAdapter
+from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig
+from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
 
 MINIMUM_PYTHON = (3, 12)
 OPTIONAL_MODULES = {
@@ -70,6 +74,27 @@ def _doctor(as_json: bool) -> int:
     return 0 if healthy else 1
 
 
+def _run(args: argparse.Namespace) -> int:
+    if args.suite != "_inline_echo" or args.model != "mock" or args.mode != "text":
+        print("only --suite _inline_echo --model mock --mode text is available", file=sys.stderr)
+        return 2
+    if args.ticks < 0:
+        print("--ticks must not be negative", file=sys.stderr)
+        return 2
+    script = {tick: f"line {tick // 10}" for tick in range(0, args.ticks, 10)}
+    orchestrator = Orchestrator(
+        MockAdapter(),
+        ScriptedCounterpart(script),
+        OrchestratorConfig(max_ticks=args.ticks, seed=args.seed),
+    )
+    outcome = asyncio.run(orchestrator.run())
+    for event in outcome.events:
+        details = json.dumps(event.data, sort_keys=True)
+        print(f"{event.seq:04} tick={event.tick:<4} {event.source}.{event.type} {details}")
+    print(f"status={outcome.status} ticks={outcome.ticks}")
+    return 0 if outcome.status == "completed" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser."""
     parser = argparse.ArgumentParser(prog="lambda-duplex", description=__doc__)
@@ -77,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command")
     doctor = commands.add_parser("doctor", help="check the local environment")
     doctor.add_argument("--json", action="store_true", help="print machine-readable output")
+    run = commands.add_parser("run", help="run a conversation")
+    run.add_argument("--suite", required=True)
+    run.add_argument("--model", required=True)
+    run.add_argument("--mode", choices=("text", "audio"), default="text")
+    run.add_argument("--ticks", type=int, default=50)
+    run.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -86,5 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "doctor":
         return _doctor(args.json)
+    if args.command == "run":
+        return _run(args)
     parser.print_help()
     return 0

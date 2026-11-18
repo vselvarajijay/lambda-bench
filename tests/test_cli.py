@@ -57,3 +57,21 @@ def test_module_entry_point() -> None:
     )
 
     assert result.stdout.strip() == f"lambda-duplex {__version__}"
+
+
+def test_inline_run_is_repeatable(capsys: pytest.CaptureFixture[str]) -> None:
+    arguments = ["run", "--suite", "_inline_echo", "--model", "mock", "--mode", "text"]
+
+    assert cli.main([*arguments, "--ticks", "50"]) == 0
+    first = capsys.readouterr().out
+    assert cli.main([*arguments, "--ticks", "50"]) == 0
+    second = capsys.readouterr().out
+
+    assert first == second
+    assert "status=completed ticks=50" in first
+    assert 'model.spoke {"text": "echo: line 4"}' in first
+
+
+def test_run_rejects_unavailable_combination(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["run", "--suite", "missing", "--model", "mock"]) == 2
+    assert "only --suite" in capsys.readouterr().err
