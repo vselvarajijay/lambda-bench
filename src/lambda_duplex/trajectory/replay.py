@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,9 @@ from lambda_duplex.adapters.base import (
     SessionSummary,
     StepResult,
 )
+from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE
 from lambda_duplex.llm import GatewayMode, LLMGateway
+from lambda_duplex.orchestrator import MediaClock
 from lambda_duplex.suites.base import Suite
 from lambda_duplex.suites.loader import load_suite
 from lambda_duplex.suites.runtime import run_scenario, score_trajectory
@@ -28,7 +31,9 @@ class RecordedModel:
 
     capabilities = Capabilities(clock_modes=frozenset({"lockstep"}), deterministic_seed=True)
 
-    def __init__(self, stored: StoredRun) -> None:
+    def __init__(self, stored: StoredRun, pcm: bytes = b"", samples_per_tick: int = 0) -> None:
+        self._pcm = pcm
+        self._tick_bytes = samples_per_tick * 2
         events = stored.trajectory.events
         self._text = {
             event.tick: event.data["text"]
@@ -48,7 +53,10 @@ class RecordedModel:
 
     async def step(self, frame: MediaFrame, tick: int) -> StepResult:
         self._steps += 1
-        return StepResult(MediaFrame(tick=tick, text=self._text.get(tick)))
+        start = tick * self._tick_bytes
+        pcm = self._pcm[start : start + self._tick_bytes]
+        rate = INTERNAL_SAMPLE_RATE if self._tick_bytes else None
+        return StepResult(MediaFrame(tick, pcm, rate, self._text.get(tick)))
 
     async def stop(self) -> SessionSummary:
         return SessionSummary(self._steps)
@@ -90,18 +98,39 @@ async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
         problems.append("rescored result differs from result.json")
     settings = stored.manifest["run"]
     mode: GatewayMode = "replay" if stored.llm_entries else "off"
+    audio = stored.manifest.get("audio")
+    model = RecordedModel(stored)
+    speech = None
+    if audio is not None:
+        from lambda_duplex.audio.synthetic import SyntheticSpeech
+        from lambda_duplex.audio.tracks import read_track
+
+        if audio["backend"] != "synthetic":
+            raise TrajectoryError(f"cannot replay audio backend {audio['backend']}")
+        samples = MediaClock(settings["tick_ms"]).samples_per_tick(audio["sample_rate"])
+        pcm = read_track(path / "audio" / "model.flac")
+        if hashlib.sha256(pcm).hexdigest() != audio["tracks"]["model"]["sha256"]:
+            problems.append("model audio differs from manifest")
+        model = RecordedModel(stored, pcm, samples)
+        speech = SyntheticSpeech(settings["seed"])
     replayed = await run_scenario(
         suite,
         stored.scenario,
-        RecordedModel(stored),
+        model,
         seed=settings["seed"],
         max_ticks=settings["max_ticks"],
         condition=settings["condition"],
         llm=LLMGateway(mode, entries=stored.llm_entries),
+        speech=speech,
     )
     stored_events = [event.to_dict() for event in stored.trajectory.events]
     replay_events = [event.to_dict() for event in replayed.trajectory.events]
-    replay_ok = stored_events == replay_events
-    if not replay_ok:
+    replay_ok = stored_events == replay_events and not problems
+    if stored_events != replay_events:
         problems.append(_first_difference(stored_events, replay_events))
+    if audio is not None and replayed.tracks is not None:
+        for name, pcm in replayed.tracks.tracks().items():
+            if hashlib.sha256(pcm).hexdigest() != audio["tracks"][name]["sha256"]:
+                replay_ok = False
+                problems.append(f"{name} audio differs after replay")
     return VerifyReport(path, rescore_ok, replay_ok, tuple(problems))

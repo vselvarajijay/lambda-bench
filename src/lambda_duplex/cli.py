@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from lambda_duplex import __version__
-from lambda_duplex.adapters.mock import MockAdapter
+from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
 from lambda_duplex.metrics.report import build_report, format_report
 from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
@@ -106,6 +106,14 @@ def _stored_suite_reference(reference: str, name: str) -> str:
     return name if Path(reference).is_absolute() else reference
 
 
+def _speech_backend(args: argparse.Namespace, seed: int) -> SpeechRenderer | None:
+    if args.mode != "audio":
+        return None
+    from lambda_duplex.audio.synthetic import SyntheticSpeech
+
+    return SyntheticSpeech(seed)
+
+
 def _trial_seed(seed: int, scenario_id: str, trial: int) -> int:
     """Keep trial zero on the requested seed and derive independent later seeds."""
     if trial == 0:
@@ -118,8 +126,11 @@ def _run_suite(args: argparse.Namespace) -> int:
         print("--k must be at least 1", file=sys.stderr)
         return 2
     model, _, behavior = args.model.partition(":")
-    if model != "mock" or args.mode != "text":
-        print("only mock models in text mode are available", file=sys.stderr)
+    if model != "mock":
+        print("only mock models are available", file=sys.stderr)
+        return 2
+    if args.mode == "audio" and args.audio_backend != "synthetic":
+        print("audio mode currently requires --audio-backend synthetic", file=sys.stderr)
         return 2
     try:
         loaded = load_suite(args.suite)
@@ -138,13 +149,23 @@ def _run_suite(args: argparse.Namespace) -> int:
     for scenario in scenarios:
         for trial in range(args.k):
             seed = _trial_seed(args.seed, scenario.id, trial)
+            speech = _speech_backend(args, seed)
             try:
-                adapter = mock_for(loaded.suite, scenario, behaviors[trial % len(behaviors)])
+                adapter = mock_for(
+                    loaded.suite, scenario, behaviors[trial % len(behaviors)], speech
+                )
             except ValueError as error:
                 print(error, file=sys.stderr)
                 return 2
             run = asyncio.run(
-                run_scenario(loaded.suite, scenario, adapter, seed=seed, max_ticks=suite_ticks)
+                run_scenario(
+                    loaded.suite,
+                    scenario,
+                    adapter,
+                    seed=seed,
+                    max_ticks=suite_ticks,
+                    speech=speech,
+                )
             )
             if args.out is not None:
                 spec = RunSpec(
@@ -155,6 +176,7 @@ def _run_suite(args: argparse.Namespace) -> int:
                     suite_ticks,
                     run.trajectory.tick_ms,
                     loaded.suite.manifest.default_condition,
+                    audio_backend=args.audio_backend if args.mode == "audio" else None,
                 )
                 try:
                     write_run(
@@ -165,6 +187,7 @@ def _run_suite(args: argparse.Namespace) -> int:
                         run.trajectory,
                         run.result,
                         run.decision,
+                        tracks=run.tracks,
                     )
                 except TrajectoryError as error:
                     print(error, file=sys.stderr)
@@ -281,6 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--suite", required=True)
     run.add_argument("--model", required=True)
     run.add_argument("--mode", choices=("text", "audio"), default="text")
+    run.add_argument("--audio-backend", choices=("synthetic",))
     run.add_argument("--ticks", type=int)
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--split", choices=("dev", "test"), default="dev")

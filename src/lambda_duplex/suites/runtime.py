@@ -8,10 +8,12 @@ import math
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
 
 from lambda_duplex.adapters.base import MediaFrame, ModelAdapter
-from lambda_duplex.adapters.mock import MockAdapter
+from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
+from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, PlayoutBuffer
 from lambda_duplex.llm import LLMGateway
 from lambda_duplex.orchestrator import (
     DrainedEvent,
@@ -46,16 +48,39 @@ def _stored_data(data: Any) -> dict[str, Any]:
     return stored
 
 
+class TrackStore(Protocol):
+    """Recorder that can write its tracks with a run."""
+
+    def record(self, tick: int, incoming: MediaFrame, output: MediaFrame) -> None: ...
+
+    def tracks(self) -> dict[str, bytes]: ...
+
+    def write(self, folder: Path) -> dict[str, Any]: ...
+
+
+@dataclass
+class _Playback:
+    segment: SpeechSegment
+    segment_id: int
+    start_tick: int
+    audio: PlayoutBuffer | None
+
+
 class PolicyCounterpart:
     """Adapt a suite policy to the orchestrator's counterpart contract."""
 
-    def __init__(self, policy: CounterpartPolicy, tick_ms: int) -> None:
+    def __init__(
+        self, policy: CounterpartPolicy, tick_ms: int, speech: SpeechRenderer | None = None
+    ) -> None:
         self._policy = policy
         self._clock = MediaClock(tick_ms)
+        self._speech = speech
+        self._samples_per_tick = self._clock.samples_per_tick(INTERNAL_SAMPLE_RATE)
         self._queue: deque[SpeechSegment] = deque()
         self._events: list[DrainedEvent] = []
         self._utterances: list[ModelUtterance] = []
         self._delivered: list[DeliveredSpan] = []
+        self._playing: _Playback | None = None
         self._ending = False
         self._next_segment_id = 0
         self._hold_until_tick = 0
@@ -71,15 +96,45 @@ class PolicyCounterpart:
     def _record(self, events: Iterable[SuiteEvent], origin: str) -> None:
         self._events.extend((event.type, origin, _stored_data(event.data)) for event in events)
 
+    def _deliver(self, playback: _Playback, end_tick: int, interrupted: bool) -> None:
+        segment = playback.segment
+        tags = () if interrupted else segment.tags
+        span = DeliveredSpan(
+            playback.segment_id, segment.text, tags, playback.start_tick, end_tick, interrupted
+        )
+        self._delivered.append(span)
+        self._playing = None
+        pause_ticks = math.ceil(segment.pause_after_ms / self._clock.tick_ms)
+        self._hold_until_tick = end_tick + 1 + (0 if interrupted else pause_ticks)
+        self._record(self._policy.on_delivered(span), "delivery")
+
     def _accept(self, output: PolicyOutput | None) -> None:
         if output is None:
             return
         if output.preempt:
             self._queue.clear()
             self._hold_until_tick = self._clock.tick
+            if self._playing is not None:
+                self._deliver(self._playing, self._clock.tick, interrupted=True)
+                self._hold_until_tick = self._clock.tick
         self._queue.extend(output.segments)
         self._record(output.events, "policy")
         self._ending = self._ending or output.end_conversation
+
+    def _start_next(self, tick: int) -> _Playback:
+        segment = self._queue.popleft()
+        audio = None
+        if self._speech is not None:
+            audio = PlayoutBuffer(self._samples_per_tick)
+            audio.push(self._speech.render(segment.text))
+        playback = _Playback(segment, self._next_segment_id, tick, audio)
+        self._next_segment_id += 1
+        self._playing = playback
+        return playback
+
+    def _frame(self, tick: int, pcm: bytes, text: str | None) -> MediaFrame:
+        rate = None if self._speech is None else INTERNAL_SAMPLE_RATE
+        return MediaFrame(tick, pcm, rate, text, pcm if self._speech is not None else None)
 
     async def start(self, seed: int) -> None:
         return None
@@ -97,18 +152,21 @@ class PolicyCounterpart:
         self._clock.tick = tick
         if not self._ending:
             self._accept(self._policy.on_tick(self._view()))
-        if tick < self._hold_until_tick or not self._queue:
-            return MediaFrame(tick=tick)
-        segment = self._queue.popleft()
-        span = DeliveredSpan(self._next_segment_id, segment.text, segment.tags, tick, tick)
-        self._next_segment_id += 1
-        self._delivered.append(span)
-        self._hold_until_tick = tick + 1 + math.ceil(segment.pause_after_ms / self._clock.tick_ms)
-        self._record(self._policy.on_delivered(span), "delivery")
-        return MediaFrame(tick=tick, text=segment.text)
+        silent = bytes(self._samples_per_tick * 2) if self._speech is not None else b""
+        text = None
+        if self._playing is None:
+            if tick < self._hold_until_tick or not self._queue:
+                return self._frame(tick, silent, None)
+            text = self._start_next(tick).segment.text
+        playback = self._playing
+        assert playback is not None
+        pcm = b"" if playback.audio is None else playback.audio.pop_tick()
+        if playback.audio is None or playback.audio.pending_samples == 0:
+            self._deliver(playback, tick, interrupted=False)
+        return self._frame(tick, pcm, text)
 
     def is_finished(self) -> bool:
-        if self._queue or self._clock.tick < self._hold_until_tick:
+        if self._queue or self._playing is not None or self._clock.tick < self._hold_until_tick:
             return False
         return self._ending or self._policy.is_finished(self._view())
 
@@ -128,6 +186,7 @@ class ScenarioRun:
     trajectory: Trajectory
     result: RunResult
     decision: PassDecision
+    tracks: TrackStore | None = None
 
 
 def decide_pass(suite: Suite, result: RunResult) -> PassDecision:
@@ -166,24 +225,37 @@ async def run_scenario(
     max_ticks: int = 200,
     condition: str | None = None,
     llm: LLMGateway | None = None,
+    speech: SpeechRenderer | None = None,
 ) -> ScenarioRun:
     """Run and score one scenario."""
     context = RunContext(
         seed, condition or suite.manifest.default_condition, llm=llm or LLMGateway()
     )
-    config = OrchestratorConfig(max_ticks=max_ticks, seed=seed)
+    rate = None if speech is None else INTERNAL_SAMPLE_RATE
+    config = OrchestratorConfig(max_ticks=max_ticks, seed=seed, audio_sample_rate=rate)
     policy = suite.create_policy(copy.deepcopy(scenario), context)
-    counterpart = PolicyCounterpart(policy, config.tick_ms)
+    counterpart = PolicyCounterpart(policy, config.tick_ms, speech)
+    tracks: TrackStore | None = None
+    if speech is not None:
+        from lambda_duplex.audio.tracks import TrackRecorder
+
+        samples = MediaClock(config.tick_ms).samples_per_tick(INTERNAL_SAMPLE_RATE)
+        tracks = TrackRecorder(INTERNAL_SAMPLE_RATE, samples)
     model_context = suite.model_context(public_scenario(scenario), adapter.capabilities)
-    outcome = await Orchestrator(adapter, counterpart, config, model_context).run()
+    outcome = await Orchestrator(adapter, counterpart, config, model_context, tracks).run()
     trajectory = Trajectory(
         scenario, outcome.status, outcome.ended_by, outcome.ticks, config.tick_ms, outcome.events
     )
     result, decision = score_trajectory(suite, trajectory)
-    return ScenarioRun(outcome, trajectory, result, decision)
+    return ScenarioRun(outcome, trajectory, result, decision, tracks)
 
 
-def mock_for(suite: Suite, scenario: Scenario, behavior: str = "good") -> MockAdapter:
+def mock_for(
+    suite: Suite,
+    scenario: Scenario,
+    behavior: str = "good",
+    speech: SpeechRenderer | None = None,
+) -> MockAdapter:
     """Create a scripted model for a suite that provides mock behaviors."""
     if not isinstance(suite, MockScripted):
         raise ValueError(f"suite {suite.manifest.name} does not provide mock behaviors")
@@ -191,4 +263,4 @@ def mock_for(suite: Suite, scenario: Scenario, behavior: str = "good") -> MockAd
     if behavior not in scripts:
         available = ", ".join(sorted(scripts)) or "none"
         raise ValueError(f"unknown mock behavior {behavior!r}; available: {available}")
-    return MockAdapter(scripts[behavior], echo=False)
+    return MockAdapter(scripts[behavior], echo=False, speech=speech)

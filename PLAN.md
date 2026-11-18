@@ -799,8 +799,8 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.1: Audio tracks with synthetic speech
 
-- [ ] Frame types, resampling, FLAC tracks, mix, playout buffer, truncation.
-- [ ] Mock audio built from known speech-shaped signal segments.
+- [x] Frame types, resampling, FLAC tracks, mix, playout buffer, truncation.
+- [x] Mock audio built from known speech-shaped signal segments.
 - **Run:** `uv run lambda-duplex run --suite demo --model mock --mode audio --audio-backend synthetic --out runs/a1`
 - **Test:** `pytest tests/audio/test_tracks.py` checks sample counts, alignment and truncation.
 - **Done when:** track lengths match the clock to the sample.

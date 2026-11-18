@@ -11,7 +11,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import jsonschema
 
@@ -60,6 +60,12 @@ RESULT_SCHEMA: dict[str, Any] = {
 }
 
 
+class AudioTracks(Protocol):
+    """Audio writer supplied by audio runs."""
+
+    def write(self, folder: Path) -> dict[str, Any]: ...
+
+
 class TrajectoryError(RuntimeError):
     """A stored run is missing, invalid, or cannot be written."""
 
@@ -76,6 +82,7 @@ class RunSpec:
     tick_ms: int
     condition: str
     clock_mode: str = "lockstep"
+    audio_backend: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,12 +142,13 @@ def write_run(
     result: RunResult,
     decision: PassDecision,
     llm_entries: Iterable[Mapping[str, Any]] = (),
+    tracks: AudioTracks | None = None,
 ) -> Path:
     """Write a complete run directory, or leave no destination behind."""
     if path.exists():
         raise TrajectoryError(f"{path} already exists")
     path.parent.mkdir(parents=True, exist_ok=True)
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "framework_version": __version__,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -166,6 +174,8 @@ def write_run(
     }
     temporary = Path(tempfile.mkdtemp(prefix=f".{path.name}.", dir=path.parent))
     try:
+        if tracks is not None:
+            manifest["audio"] = {"backend": spec.audio_backend, **tracks.write(temporary / "audio")}
         _write_json(temporary / "manifest.json", manifest)
         _write_json(temporary / "scenario.json", scenario_to_dict(trajectory.scenario))
         _write_jsonl(temporary / "events.jsonl", (event.to_dict() for event in trajectory.events))

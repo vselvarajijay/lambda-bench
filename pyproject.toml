@@ -17,11 +17,21 @@ dependencies = [
 [project.scripts]
 lambda-duplex = "lambda_duplex.cli:main"
 
+[project.optional-dependencies]
+audio = [
+    "numpy>=2",
+    "soundfile>=0.13",
+    "soxr>=0.5",
+]
+
 [dependency-groups]
 dev = [
     "mypy>=1.13",
+    "numpy>=2",
     "pytest>=8.3",
     "ruff>=0.8",
+    "soundfile>=0.13",
+    "soxr>=0.5",
     "types-jsonschema>=4.26.0.20261006",
     "types-pyyaml>=6.0.12.20261113",
 ]
