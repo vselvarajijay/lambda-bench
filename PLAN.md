@@ -832,15 +832,16 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 - [ ] `TTSBackend`, cache, word timing, a local open backend, ElevenLabs backend.
 - [ ] Persona generator for dev voices.
 - [ ] Listening set and cost, speed and license comparison.
+- [ ] Calibrate level per voice, normalize utterance loudness, and route calibration through the TTS cache.
 - **Run:** `uv run lambda-duplex tts sample --persona dev_voice_03 --backend <name> --text "It just felt... a little close to home."` `[local]` or `[paid]`
 - **Test:** cache and timing tests use a fake backend in CI.
 - **Done when:** the maintainer chooses official and development backends.
 
 #### Slice 2.6: Effects and conditions
 
-- [ ] Port and adapt noise, bursts, muffling, G.711 and frame drops, with notices.
-- [ ] MUSAN downloader with attribution manifest, and a small generated noise fixture for CI.
-- [ ] `conditions.py` presets.
+- [x] Implement noise, bursts, muffling, G.711 and frame drops.
+- [x] MUSAN downloader with attribution manifest, and a small generated noise fixture for CI.
+- [x] `conditions.py` presets.
 - **Run:** `uv run lambda-duplex effects preview tests/fixtures/speech.wav --condition realistic --seed 7 --out /tmp/r.wav`
 - **Test:** same seed gives identical bytes, SNR is within 1 dB of target, and the drop schedule matches.
 - **Done when:** every preset produces expected metadata and listenable audio.
@@ -848,6 +849,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 #### Slice 2.7: Turn-taking policy
 
 - [ ] Interrupt, yield and backchannel decisions, with deterministic rules first and an optional LLM decision.
+- [ ] Counterpart vocal tics and non-directed speech for the `realistic` condition.
 - [ ] Persona settings for patience, interruptiveness and silence tolerance.
 - **Run:** `uv run lambda-duplex run --suite demo --model mock --mode audio --condition ablate_turns --seed 3 --out runs/t1`
 - **Test:** scripted model behaviors trigger expected actions on exact ticks.

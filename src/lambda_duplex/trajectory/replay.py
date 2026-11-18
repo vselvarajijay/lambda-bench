@@ -19,6 +19,7 @@ from lambda_duplex.adapters.base import (
     StepResult,
 )
 from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE
+from lambda_duplex.counterpart.errors import NoiseAssetError
 from lambda_duplex.llm import GatewayMode, LLMGateway
 from lambda_duplex.orchestrator import MediaClock
 from lambda_duplex.suites.base import Suite
@@ -121,7 +122,9 @@ def _stored_tracks(path: Path, audio: Mapping[str, Any]) -> tuple[dict[str, byte
     return tracks, problems
 
 
-async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
+async def verify_run(
+    path: Path, suite: Suite | None = None, noise_dir: Path | None = None
+) -> VerifyReport:
     """Check that a stored run rescores and replays identically."""
     stored = load_run(path)
     if suite is None:
@@ -151,16 +154,29 @@ async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
         problems.extend(track_problems)
         model = RecordedModel(stored, stored_tracks["model"], samples)
         speech = SyntheticSpeech(settings["seed"])
-    replayed = await run_scenario(
-        suite,
-        stored.scenario,
-        model,
-        seed=settings["seed"],
-        max_ticks=settings["max_ticks"],
-        condition=settings["condition"],
-        llm=LLMGateway(mode, entries=stored.llm_entries),
-        speech=speech,
-    )
+    effects = stored.manifest.get("effects")
+    noise_source = (effects or {}).get("noise_source")
+    uses_recording = noise_source is not None and noise_source.get("type") != "generated"
+    if uses_recording and noise_dir is None:
+        raise TrajectoryError("this run used recorded noise; provide --noise-dir")
+    try:
+        replayed = await run_scenario(
+            suite,
+            stored.scenario,
+            model,
+            seed=settings["seed"],
+            max_ticks=settings["max_ticks"],
+            condition=settings["condition"],
+            llm=LLMGateway(mode, entries=stored.llm_entries),
+            speech=speech,
+            noise_dir=noise_dir if uses_recording else None,
+        )
+    except NoiseAssetError as error:
+        raise TrajectoryError(str(error)) from error
+    if replayed.effects != stored.manifest.get("effects"):
+        problems.append("audio effects differ after replay")
+    if replayed.condition_details != stored.manifest.get("condition"):
+        problems.append("condition details differ after replay")
     stored_events = [event.to_dict() for event in stored.trajectory.events]
     replay_events = [event.to_dict() for event in replayed.trajectory.events]
     replay_ok = stored_events == replay_events and not problems

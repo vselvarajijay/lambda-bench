@@ -40,12 +40,23 @@ from lambda_duplex.suites.base import (
     Trajectory,
 )
 from lambda_duplex.suites.loader import public_scenario
+from lambda_duplex.trajectory.seeds import stream_seed
+
+CALIBRATION_TEXT = "The quick brown fox jumps over the lazy dog near the quiet river."
 
 
 def _stored_data(data: Any) -> dict[str, Any]:
     """Copy event data into the JSON form used by stored trajectories."""
     stored: dict[str, Any] = json.loads(json.dumps(dict(data), allow_nan=False))
     return stored
+
+
+class AudioEffects(Protocol):
+    """Streaming degradation applied to counterpart audio."""
+
+    def process(self, pcm: bytes) -> bytes: ...
+
+    def metadata(self) -> dict[str, Any]: ...
 
 
 class TrackStore(Protocol):
@@ -72,11 +83,16 @@ class PolicyCounterpart:
     """Adapt a suite policy to the orchestrator's counterpart contract."""
 
     def __init__(
-        self, policy: CounterpartPolicy, tick_ms: int, speech: SpeechRenderer | None = None
+        self,
+        policy: CounterpartPolicy,
+        tick_ms: int,
+        speech: SpeechRenderer | None = None,
+        effects: AudioEffects | None = None,
     ) -> None:
         self._policy = policy
         self._clock = MediaClock(tick_ms)
         self._speech = speech
+        self._effects = effects
         self._samples_per_tick = self._clock.samples_per_tick(INTERNAL_SAMPLE_RATE)
         self._queue: deque[SpeechSegment] = deque()
         self._events: list[DrainedEvent] = []
@@ -153,7 +169,9 @@ class PolicyCounterpart:
 
     def _frame(self, tick: int, pcm: bytes, text: str | None) -> MediaFrame:
         rate = None if self._speech is None else INTERNAL_SAMPLE_RATE
-        return MediaFrame(tick, pcm, rate, text, pcm if self._speech is not None else None)
+        clean = pcm if self._speech is not None else None
+        heard = pcm if self._effects is None else self._effects.process(pcm)
+        return MediaFrame(tick, heard, rate, text, clean)
 
     async def start(self, seed: int) -> None:
         return None
@@ -212,6 +230,9 @@ class ScenarioRun:
     result: RunResult
     decision: PassDecision
     tracks: TrackStore | None = None
+    effects: dict[str, Any] | None = None
+    condition: str = "clean"
+    condition_details: dict[str, Any] | None = None
 
 
 def decide_pass(suite: Suite, result: RunResult) -> PassDecision:
@@ -251,28 +272,59 @@ async def run_scenario(
     condition: str | None = None,
     llm: LLMGateway | None = None,
     speech: SpeechRenderer | None = None,
+    noise_dir: Path | None = None,
 ) -> ScenarioRun:
     """Run and score one scenario."""
-    context = RunContext(
-        seed, condition or suite.manifest.default_condition, llm=llm or LLMGateway()
-    )
+    selected = condition or ("clean" if speech is None else suite.manifest.default_condition)
+    if speech is None and selected != "clean":
+        raise ValueError("text mode supports only the clean condition")
+    context = RunContext(seed, selected, llm=llm or LLMGateway())
     rate = None if speech is None else INTERNAL_SAMPLE_RATE
     config = OrchestratorConfig(max_ticks=max_ticks, seed=seed, audio_sample_rate=rate)
     policy = suite.create_policy(copy.deepcopy(scenario), context)
-    counterpart = PolicyCounterpart(policy, config.tick_ms, speech)
     tracks: TrackStore | None = None
+    effects: AudioEffects | None = None
+    condition_details: dict[str, Any] | None = None
     if speech is not None:
         from lambda_duplex.audio.tracks import TrackRecorder
+        from lambda_duplex.conditions import condition_record, get_condition
+        from lambda_duplex.counterpart.effects import EffectChain, EffectConfig, active_rms
+        from lambda_duplex.counterpart.effects.chain import NOMINAL_SPEECH_RMS
+        from lambda_duplex.counterpart.effects.noise_assets import load_noise_bed
 
         samples = MediaClock(config.tick_ms).samples_per_tick(INTERNAL_SAMPLE_RATE)
         tracks = TrackRecorder(INTERNAL_SAMPLE_RATE, samples)
+        audio_condition = get_condition(selected)
+        condition_details = condition_record(audio_condition)
+        effect_config = audio_condition.effects
+        if effect_config != EffectConfig():
+            effect_seed = stream_seed(seed, f"effects:{scenario.id}")
+            bed, source = None, None
+            if noise_dir is not None and effect_config.noise is not None:
+                noise = load_noise_bed(noise_dir, effect_seed)
+                bed, source = noise.samples, noise.record
+            reference = NOMINAL_SPEECH_RMS
+            if effect_config.noise is not None:
+                reference = active_rms(speech.render(CALIBRATION_TEXT))
+            effects = EffectChain(effect_config, effect_seed, samples, bed, source, reference)
+    counterpart = PolicyCounterpart(policy, config.tick_ms, speech, effects)
     model_context = suite.model_context(public_scenario(scenario), adapter.capabilities)
     outcome = await Orchestrator(adapter, counterpart, config, model_context, tracks).run()
     trajectory = Trajectory(
         scenario, outcome.status, outcome.ended_by, outcome.ticks, config.tick_ms, outcome.events
     )
     result, decision = score_trajectory(suite, trajectory)
-    return ScenarioRun(outcome, trajectory, result, decision, tracks)
+    metadata = None if effects is None else effects.metadata()
+    return ScenarioRun(
+        outcome,
+        trajectory,
+        result,
+        decision,
+        tracks,
+        metadata,
+        context.condition,
+        condition_details,
+    )
 
 
 def mock_for(
