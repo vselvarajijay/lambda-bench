@@ -737,8 +737,8 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.1: Package and CI
 
-- [ ] `pyproject.toml`, `src/` package, typed CLI shell, lint, type check, pytest.
-- [ ] GitHub Actions on Python 3.12.
+- [x] `pyproject.toml`, `src/` package, typed CLI shell, lint, type check, pytest.
+- [x] GitHub Actions on Python 3.12.
 - **Run:** `uv run lambda-duplex --version && uv run lambda-duplex doctor`
 - **Test:** `uv run pytest tests/test_cli.py`
 - **Done when:** CI passes on a PR. This also gives `ci-watcher` checks to read.
