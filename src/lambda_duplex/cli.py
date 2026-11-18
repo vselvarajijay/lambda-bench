@@ -246,6 +246,7 @@ def _load_metric_timeline(path: Path) -> ConversationTimeline:
             "duration_ms": stored["duration_ms"],
             "counterpart": stored["counterpart"]["segments"],
             "model": stored["model"]["segments"],
+            "counterpart_events": stored["counterpart"].get("events", []),
             "goal_ms": goals[0].time_ms if goals else None,
             "talk_target": list(suite.manifest.talk_ratio_target),
         }

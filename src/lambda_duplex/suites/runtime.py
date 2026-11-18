@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import array
 import copy
 import json
 import math
+import sys
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -14,6 +16,18 @@ from typing import Any, Protocol
 from lambda_duplex.adapters.base import MediaFrame, ModelAdapter
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
 from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, PlayoutBuffer, sample_count
+from lambda_duplex.counterpart.turn_taking import (
+    INJECTED_TAG,
+    INTERRUPT_TEXT,
+    OVERLAY_TEXT,
+    PROMPT_TEXT,
+    LLMInterruptDecider,
+    SpeechGate,
+    TurnAction,
+    TurnController,
+    TurnPersona,
+    pcm_samples,
+)
 from lambda_duplex.llm import LLMGateway
 from lambda_duplex.orchestrator import (
     DrainedEvent,
@@ -70,6 +84,25 @@ class TrackStore(Protocol):
 
 
 @dataclass
+class _Overlay:
+    kind: str
+    start_tick: int
+    audio: PlayoutBuffer
+    duration_ms: float
+
+
+def _mix_pcm(first: bytes, second: bytes) -> bytes:
+    left = pcm_samples(first)
+    right = pcm_samples(second)
+    mixed = array.array(
+        "h", (max(-32768, min(32767, a + b)) for a, b in zip(left, right, strict=True))
+    )
+    if sys.byteorder == "big":
+        mixed.byteswap()
+    return mixed.tobytes()
+
+
+@dataclass
 class _Playback:
     segment: SpeechSegment
     segment_id: int
@@ -88,11 +121,15 @@ class PolicyCounterpart:
         tick_ms: int,
         speech: SpeechRenderer | None = None,
         effects: AudioEffects | None = None,
+        turns: TurnController | None = None,
     ) -> None:
         self._policy = policy
         self._clock = MediaClock(tick_ms)
         self._speech = speech
         self._effects = effects
+        self._turns = turns
+        self._overlays: list[_Overlay] = []
+        self._speech_gate = SpeechGate() if turns is not None else None
         self._samples_per_tick = self._clock.samples_per_tick(INTERNAL_SAMPLE_RATE)
         self._queue: deque[SpeechSegment] = deque()
         self._events: list[DrainedEvent] = []
@@ -116,7 +153,9 @@ class PolicyCounterpart:
 
     def _deliver(self, playback: _Playback, end_tick: int, interrupted: bool) -> None:
         segment = playback.segment
-        tags = () if interrupted else segment.tags
+        injected = INJECTED_TAG in segment.tags
+        credit_tags = tuple(tag for tag in segment.tags if tag != INJECTED_TAG)
+        tags = () if interrupted else credit_tags
         span = DeliveredSpan(
             playback.segment_id, segment.text, tags, playback.start_tick, end_tick, interrupted
         )
@@ -126,19 +165,18 @@ class PolicyCounterpart:
         self._hold_until_tick = end_tick + 1 + (0 if interrupted else pause_ticks)
         self._record(self._policy.on_delivered(span), "delivery")
         played_ms = (end_tick - playback.start_tick + 1) * self._clock.tick_ms
-        self._events.append(
-            (
-                "segment_delivered",
-                "core",
-                {
-                    "segment_id": span.segment_id,
-                    "start_tick": span.start_tick,
-                    "end_tick": span.end_tick,
-                    "duration_ms": played_ms if interrupted else playback.duration_ms,
-                    "interrupted": interrupted,
-                },
-            )
-        )
+        details: dict[str, Any] = {
+            "segment_id": span.segment_id,
+            "start_tick": span.start_tick,
+            "end_tick": span.end_tick,
+            "duration_ms": played_ms if interrupted else playback.duration_ms,
+            "interrupted": interrupted,
+        }
+        if injected:
+            details["injected"] = True
+        self._events.append(("segment_delivered", "core", details))
+        if self._turns is not None:
+            self._turns.speech_delivered()
 
     def _accept(self, output: PolicyOutput | None) -> None:
         if output is None:
@@ -181,6 +219,9 @@ class PolicyCounterpart:
         playing = self._playing
         if playing is not None and playing.last_played_tick is not None:
             self._deliver(playing, playing.last_played_tick, interrupted=False)
+        if self._turns is not None:
+            assert self._speech_gate is not None
+            self._turns.observe_model(tick, self._speech_gate.update(frame.pcm), frame.text)
         if not frame.text:
             return
         utterance = ModelUtterance(frame.text, frame.tick)
@@ -188,28 +229,79 @@ class PolicyCounterpart:
         if not self._ending:
             self._accept(await self._policy.on_model_utterance(utterance, self._view()))
 
-    async def render(self, tick: int) -> MediaFrame:
-        self._clock.tick = tick
-        if not self._ending:
-            self._accept(self._policy.on_tick(self._view()))
-        silent = bytes(self._samples_per_tick * 2) if self._speech is not None else b""
+    def _core_event(self, name: str, **data: Any) -> None:
+        self._events.append((name, "core", _stored_data(data)))
+
+    def _start_overlay(self, kind: str, tick: int) -> None:
+        assert self._speech is not None
+        pcm = self._speech.render(OVERLAY_TEXT[kind])
+        audio = PlayoutBuffer(self._samples_per_tick)
+        audio.push(pcm)
+        duration_ms = sample_count(pcm) * 1000 / INTERNAL_SAMPLE_RATE
+        self._overlays.append(_Overlay(kind, tick, audio, duration_ms))
+        start_ms = tick * self._clock.tick_ms
+        self._core_event(
+            "counterpart_event", kind=kind, start_ms=start_ms, end_ms=start_ms + duration_ms
+        )
+
+    def _apply_turn_action(self, action: TurnAction, tick: int) -> None:
+        self._core_event("turn_action", action=action.kind, reason=action.reason)
+        if action.kind == "yield":
+            if self._playing is not None:
+                self._deliver(self._playing, tick - 1, interrupted=True)
+                self._hold_until_tick = tick
+        elif action.kind == "interrupt":
+            if not self._queue:
+                self._queue.append(SpeechSegment(INTERRUPT_TEXT, (INJECTED_TAG,)))
+            self._hold_until_tick = tick
+        elif action.kind == "prompt":
+            self._queue.append(SpeechSegment(PROMPT_TEXT))
+        else:
+            self._start_overlay(action.kind, tick)
+
+    async def _run_turn_policy(self, tick: int) -> None:
+        if self._turns is None or self._ending:
+            return
+        actions = await self._turns.decide(tick, self._playing is not None, bool(self._queue))
+        for action in actions:
+            self._apply_turn_action(action, tick)
+
+    def _next_speech(self, tick: int, silent: bytes) -> tuple[bytes, str | None]:
         text = None
+        may_start = self._turns is None or self._ending or self._turns.may_start_speech()
         if self._playing is None:
-            if tick < self._hold_until_tick or not self._queue:
-                return self._frame(tick, silent, None)
+            if tick < self._hold_until_tick or not self._queue or not may_start:
+                return silent, None
             text = self._start_next(tick).segment.text
         playback = self._playing
         assert playback is not None
         if playback.audio is None:
             self._deliver(playback, tick, interrupted=False)
-            return self._frame(tick, b"", text)
+            return b"", text
         pcm = playback.audio.pop_tick()
         if playback.audio.pending_samples == 0:
             playback.last_played_tick = tick
-        return self._frame(tick, pcm, text)
+        return pcm, text
+
+    def _mix_overlays(self, pcm: bytes) -> bytes:
+        for overlay in list(self._overlays):
+            pcm = _mix_pcm(pcm, overlay.audio.pop_tick())
+            if overlay.audio.pending_samples == 0:
+                self._overlays.remove(overlay)
+        return pcm
+
+    async def render(self, tick: int) -> MediaFrame:
+        self._clock.tick = tick
+        if not self._ending:
+            self._accept(self._policy.on_tick(self._view()))
+        await self._run_turn_policy(tick)
+        silent = bytes(self._samples_per_tick * 2) if self._speech is not None else b""
+        pcm, text = self._next_speech(tick, silent)
+        return self._frame(tick, self._mix_overlays(pcm), text)
 
     def is_finished(self) -> bool:
-        if self._queue or self._playing is not None or self._clock.tick < self._hold_until_tick:
+        busy = self._queue or self._playing is not None or self._overlays
+        if busy or self._clock.tick < self._hold_until_tick:
             return False
         return self._ending or self._policy.is_finished(self._view())
 
@@ -285,6 +377,7 @@ async def run_scenario(
     tracks: TrackStore | None = None
     effects: AudioEffects | None = None
     condition_details: dict[str, Any] | None = None
+    turns: TurnController | None = None
     if speech is not None:
         from lambda_duplex.audio.tracks import TrackRecorder
         from lambda_duplex.conditions import condition_record, get_condition
@@ -307,7 +400,20 @@ async def run_scenario(
             if effect_config.noise is not None:
                 reference = active_rms(speech.render(CALIBRATION_TEXT))
             effects = EffectChain(effect_config, effect_seed, samples, bed, source, reference)
-    counterpart = PolicyCounterpart(policy, config.tick_ms, speech, effects)
+        if audio_condition.turn_taking == "free":
+            public_persona = scenario.data.get("persona", {})
+            hidden_persona = scenario.hidden.get("persona", {})
+            if not isinstance(public_persona, Mapping) or not isinstance(hidden_persona, Mapping):
+                raise ValueError("persona must be a mapping")
+            values = {**public_persona, **hidden_persona}
+            persona = TurnPersona.from_scenario(values, audio_condition.speech_inserts)
+            decider = None
+            if values.get("turn_decider_model"):
+                note = str(values.get("id", ""))
+                decider = LLMInterruptDecider(context.llm, str(values["turn_decider_model"]), note)
+            turn_seed = stream_seed(seed, f"turns:{scenario.id}")
+            turns = TurnController(persona, turn_seed, config.tick_ms, decider)
+    counterpart = PolicyCounterpart(policy, config.tick_ms, speech, effects, turns)
     model_context = suite.model_context(public_scenario(scenario), adapter.capabilities)
     outcome = await Orchestrator(adapter, counterpart, config, model_context, tracks).run()
     trajectory = Trajectory(

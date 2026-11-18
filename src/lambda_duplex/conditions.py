@@ -24,6 +24,7 @@ class Condition:
     voices: VoiceMode
     effects: EffectConfig
     turn_taking: TurnTaking
+    speech_inserts: bool = False
 
 
 _NOISE = NoiseConfig()
@@ -31,7 +32,9 @@ _MUFFLE = MuffleConfig()
 _CHANNEL = ChannelConfig()
 CONDITIONS = {
     "clean": Condition("clean", "single", EffectConfig(), "strict"),
-    "realistic": Condition("realistic", "varied", EffectConfig(_NOISE, _MUFFLE, _CHANNEL), "free"),
+    "realistic": Condition(
+        "realistic", "varied", EffectConfig(_NOISE, _MUFFLE, _CHANNEL), "free", True
+    ),
     "ablate_noise": Condition("ablate_noise", "single", EffectConfig(noise=_NOISE), "strict"),
     "ablate_channel": Condition(
         "ablate_channel",
@@ -55,16 +58,19 @@ def get_condition(name: str) -> Condition:
 
 def condition_record(condition: Condition) -> dict[str, Any]:
     """Describe requested settings and what the current framework applied."""
-    missing = []
-    if condition.voices == "varied":
-        missing.append("varied_voices")
+    missing = ["varied_voices"] if condition.voices == "varied" else []
+    requested: dict[str, Any] = {"voices": condition.voices, "turn_taking": condition.turn_taking}
+    applied: dict[str, Any] = {"voices": "single", "turn_taking": "scripted"}
     if condition.turn_taking == "free":
-        missing.append("free_turn_taking")
-    if condition.name == "realistic":
-        missing.extend(("vocal_tics", "non_directed_speech"))
+        requested["speech_inserts"] = condition.speech_inserts
+        applied = {
+            "voices": "single",
+            "turn_taking": "free",
+            "speech_inserts": condition.speech_inserts,
+        }
     return {
         "name": condition.name,
-        "requested": {"voices": condition.voices, "turn_taking": condition.turn_taking},
-        "applied": {"voices": "single", "turn_taking": "scripted"},
+        "requested": requested,
+        "applied": applied,
         "unimplemented": missing,
     }

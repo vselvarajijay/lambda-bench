@@ -46,6 +46,10 @@ A **counterpart event** is a backchannel, vocal tic, or non-directed remark. It 
 
 Interruption rates and per-minute values use eligible turns as their supporting count. Onsets inside ineligible turns are still classified, and ineligible turns still count as counterpart speech. `resume_rate` uses yielded interruptions as its denominator. Speech that overlaps is counted once in balance and dead-air calculations. Time inside scripted pauses is excluded from dead air, even when a counterpart event or model speech occurs there. A counterpart backchannel while the model is silent is not scored by `selectivity_backchannel`.
 
+Selectivity follows τ-voice and cannot tell a reaction from a turn that happened to end within the window. Natural endings can therefore lower these scores, so compare them across models on the same scenarios and do not read them as absolute reaction rates.
+
+Counterpart segments that were cut off, and the simulator's injected interruption line, are not eligible turns because they do not ask the model to answer.
+
 Whether the model recovers the thread of the conversation is a judge item and is not measured here.
 
 ## Edge cases
