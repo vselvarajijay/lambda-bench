@@ -1082,7 +1082,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 6.1: Batch runner
 
-- [ ] Run matrix, resume, concurrency limits, spend estimate and cap, invalid-run retry.
+- [x] Run matrix, resume, concurrency limits, spend estimate and cap, invalid-run retry.
 - **Run:** `uv run lambda-duplex batch plan --suite interviewer --tier dev --model mock`
 - **Test:** interruption and resume tests prevent duplicate or lost runs.
 - **Done when:** a killed mock batch resumes to the same final results.

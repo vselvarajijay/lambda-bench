@@ -42,7 +42,7 @@ from lambda_duplex.suites.loader import (
 from lambda_duplex.suites.runtime import ModelTranscriber, mock_for, run_scenario
 from lambda_duplex.suites.scaffold import ScaffoldError, create_suite
 from lambda_duplex.trajectory.replay import verify_run
-from lambda_duplex.trajectory.seeds import stream_seed
+from lambda_duplex.trajectory.seeds import trial_seed
 from lambda_duplex.trajectory.store import (
     RunSpec,
     TrajectoryError,
@@ -147,13 +147,6 @@ def _transcript_record(
     return {"mode": "whisper", "model": transcriber.name}
 
 
-def _trial_seed(seed: int, scenario_id: str, trial: int) -> int:
-    """Keep trial zero on the requested seed and derive independent later seeds."""
-    if trial == 0:
-        return seed
-    return stream_seed(seed, f"trial:{scenario_id}:{trial}") % (2**31)
-
-
 def _run_suite(args: argparse.Namespace) -> int:
     if args.k < 1:
         print("--k must be at least 1", file=sys.stderr)
@@ -189,7 +182,7 @@ def _run_suite(args: argparse.Namespace) -> int:
     behaviors = (behavior or "good").split("+")
     for scenario in scenarios:
         for trial in range(args.k):
-            seed = _trial_seed(args.seed, scenario.id, trial)
+            seed = trial_seed(args.seed, scenario.id, trial)
             speech = _speech_backend(args, seed)
             try:
                 adapter = mock_for(
@@ -253,6 +246,49 @@ def _run_suite(args: argparse.Namespace) -> int:
             if run.outcome.status != "completed":
                 exit_code = 1
     return exit_code
+
+
+def _batch(args: argparse.Namespace) -> int:
+    from lambda_duplex.batch import BatchError, estimate_cost, plan_batch, run_batch
+
+    try:
+        loaded = load_suite(args.suite)
+        reference = _stored_suite_reference(args.suite, loaded.suite.manifest.name)
+        plan = plan_batch(
+            loaded,
+            reference,
+            args.tier,
+            args.model,
+            split=args.split,
+            seed=args.seed,
+            max_ticks=args.ticks,
+        )
+        cost = estimate_cost(plan, args.cost_per_minute)
+        if args.batch_command == "plan":
+            print(
+                json.dumps(
+                    {**plan.to_dict(), "estimated_cost": cost},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        counts = asyncio.run(
+            run_batch(
+                loaded,
+                plan,
+                args.out,
+                jobs=args.jobs,
+                retries=args.retries,
+                cost_per_minute=args.cost_per_minute,
+                budget=args.budget,
+            )
+        )
+    except (BatchError, SuiteError, TrajectoryError, OSError, ValueError) as error:
+        print(f"batch failed: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(counts, indent=2, sort_keys=True))
+    return 1 if counts["invalid"] else 0
 
 
 def _view(args: argparse.Namespace) -> int:
@@ -614,6 +650,22 @@ def build_parser() -> argparse.ArgumentParser:
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
+    batch = commands.add_parser("batch", help="plan or run a benchmark batch")
+    batch_commands = batch.add_subparsers(dest="batch_command", required=True)
+    for name in ("plan", "run"):
+        command = batch_commands.add_parser(name)
+        command.add_argument("--suite", required=True)
+        command.add_argument("--tier", required=True)
+        command.add_argument("--model", required=True)
+        command.add_argument("--split", choices=("dev", "test"), default="dev")
+        command.add_argument("--seed", type=int, default=0)
+        command.add_argument("--ticks", type=int, default=3000)
+        command.add_argument("--cost-per-minute", type=float, default=0.0)
+        if name == "run":
+            command.add_argument("--out", type=Path, required=True)
+            command.add_argument("--jobs", type=int, default=1)
+            command.add_argument("--retries", type=int, default=1)
+            command.add_argument("--budget", type=float)
     view = commands.add_parser("view", help="build a static replay page")
     view.add_argument("path", type=Path)
     view.add_argument("--out", type=Path, required=True)
@@ -664,6 +716,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _transcribe(args)
     if args.command == "timeline":
         return _timeline(args)
+    if args.command == "batch":
+        return _batch(args)
     if args.command == "view":
         return _view(args)
     if args.command == "adapter-check":

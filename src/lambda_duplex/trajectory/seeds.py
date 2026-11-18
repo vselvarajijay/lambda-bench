@@ -15,3 +15,10 @@ def stream_seed(seed: int, name: str) -> int:
 def random_stream(seed: int, name: str) -> random.Random:
     """Create a named random stream that other streams cannot disturb."""
     return random.Random(stream_seed(seed, name))
+
+
+def trial_seed(seed: int, scenario_id: str, trial: int) -> int:
+    """Keep trial zero on the requested seed and derive independent later seeds."""
+    if trial == 0:
+        return seed
+    return stream_seed(seed, f"trial:{scenario_id}:{trial}") % (2**31)
