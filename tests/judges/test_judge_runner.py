@@ -30,10 +30,12 @@ from lambda_duplex.judges import (
 )
 from lambda_duplex.judges.blinding import (
     Turn,
+    _fingerprint,
     assert_blinded,
     blinded_transcript,
     identity_terms,
     redact,
+    transcript_fingerprint,
 )
 from lambda_duplex.judges.rubric import parse_rubric
 from lambda_duplex.llm import FakeProvider, LLMRequest
@@ -1126,3 +1128,73 @@ def test_judge_refuses_a_special_file_without_hanging(tmp_path: Path) -> None:
 
     with pytest.raises(JudgeError, match="not a regular file"):
         load_judgments(run)
+
+
+def test_failed_pass_keeps_a_score_written_before_fingerprints(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    path = run / "judges.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    del row["transcript"]["input_sha256"]
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    cache = (run / "judge_cache.jsonl").read_bytes()
+
+    outcome = judge(run, config(_outage, refresh=True, retries=0))
+
+    assert "kept the earlier scored judgment" in outcome.record["errors"]
+    assert load_judgments(run) == [row]
+    assert (run / "judge_cache.jsonl").read_bytes() == cache
+
+
+def test_failed_pass_replaces_an_old_score_of_other_words(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    path = run / "judges.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    del row["transcript"]["input_sha256"]
+    row["transcript"]["sha256"] = "other"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    judge(run, config(_outage, refresh=True, retries=0))
+
+    assert [stored["status"] for stored in load_judgments(run)] == ["failed"]
+
+
+FINGERPRINT_ROWS = [(0.0, 0, "B", "Hello.", False), (160.0, 1, "A", "Why?", False)]
+
+
+@pytest.mark.parametrize(
+    ("rows", "known"),
+    [
+        (FINGERPRINT_ROWS, False),
+        ([(0.0, 0, "A", "Hello.", False), FINGERPRINT_ROWS[1]], True),
+        ([(0.0, 0, "B", "Hello.", True), FINGERPRINT_ROWS[1]], True),
+        ([*FINGERPRINT_ROWS, (320.0, 0, "B", "", True)], True),
+        (list(reversed(FINGERPRINT_ROWS)), True),
+        ([FINGERPRINT_ROWS[0], (160.0, 1, "A", "How?", False)], True),
+    ],
+)
+def test_fingerprint_changes_with_what_a_judge_reads(rows: list[Any], known: bool) -> None:
+    assert _fingerprint(rows, known) != _fingerprint(FINGERPRINT_ROWS, True)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [(5.0, 0, "B", "Hello.", False), (900.0, 1, "A", "Why?", False)],
+        [(0.0, 0, "B", "  Hello. ", False), FINGERPRINT_ROWS[1]],
+        [*FINGERPRINT_ROWS, (320.0, 0, "B", "  ", False)],
+    ],
+)
+def test_fingerprint_ignores_what_a_judge_cannot_see(rows: list[Any]) -> None:
+    assert _fingerprint(rows, True) == _fingerprint(FINGERPRINT_ROWS, True)
+
+
+def test_stored_and_current_fingerprints_both_track_delivery(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    before = transcript_fingerprint(load_run(run))
+    _add_event(run, source="model", type="truncated", data={"ms": 160})
+    stored = load_run(run)
+
+    assert transcript_fingerprint(stored) != before
+    assert blinded_transcript(stored).input_sha256 == transcript_fingerprint(stored)

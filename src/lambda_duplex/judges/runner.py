@@ -353,12 +353,18 @@ def _identity(row: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _same_transcript(stored: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Compare transcripts, using the blinded hash for records without a fingerprint."""
+    field = "input_sha256" if "input_sha256" in stored else "sha256"
+    return bool(stored.get(field) == current[field])
+
+
 def _has_current_score(run_path: Path, record: Mapping[str, Any]) -> bool:
     """Say whether a scored judgment of this same transcript is already stored."""
     return any(
         _identity(row) == _identity(record)
         and row["status"] == "scored"
-        and row["transcript"].get("input_sha256") == record["transcript"]["input_sha256"]
+        and _same_transcript(row["transcript"], record["transcript"])
         for row in load_judgments(run_path)
     )
 

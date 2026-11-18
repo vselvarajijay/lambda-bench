@@ -608,7 +608,11 @@ def test_flat_judge_scale_is_malformed(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "body",
-    ['{"start_ms": 1' + "0" * 400 + ', "text": "x"}\n', "[" * 200000 + "\n"],
+    [
+        '{"start_ms": 1' + "0" * 400 + ', "text": "x"}\n',
+        '{"start_ms": Infinity, "text": "x"}\n',
+        "[" * 200000 + "\n",
+    ],
 )
 def test_bad_transcript_does_not_stop_the_report(tmp_path: Path, body: str) -> None:
     runs = make_runs(tmp_path / "runs", "mock:good")
@@ -639,3 +643,33 @@ def test_new_out_file_is_readable(tmp_path: Path) -> None:
 
     assert cli.main(["report", str(tmp_path / "runs"), "--out", str(target)]) == 0
     assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+def test_run_with_an_overflowing_total_is_not_in_the_composite(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good", judged=False)
+
+    def enlarge(result: dict[str, Any]) -> None:
+        next(c for c in result["checks"] if c["id"] == CHECK)["value"] = 1e300
+
+    edit_json(runs[0] / "result.json", enlarge)
+
+    composite = group_for(tmp_path / "runs", CompositeSuite({CHECK: 1e300}))["composite"]
+
+    assert composite["missing"] == 1
+    assert math.isfinite(composite["interval"]["estimate"])
+
+
+def test_failed_out_write_leaves_no_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_runs(tmp_path / "runs", judged=False)
+    folder = tmp_path / "out"
+    folder.mkdir()
+
+    def refuse(source: Any, target: Any) -> None:
+        raise OSError("refused")
+
+    monkeypatch.setattr(os, "replace", refuse)
+
+    assert cli.main(["report", str(tmp_path / "runs"), "--out", str(folder / "r.txt")]) == 2
+    assert list(folder.iterdir()) == []
