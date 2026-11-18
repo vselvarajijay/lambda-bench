@@ -236,7 +236,7 @@ def test_cli_rejects_malformed_event_fields(
 
 
 def test_events_do_not_change_interruption_classification() -> None:
-    """A counterpart event is not a turn: adding one must not add eligible turns or interruptions."""
+    """A counterpart event is not a turn, so it adds no eligible turns or interruptions."""
     base = {
         "duration_ms": 10000,
         "counterpart": [{"start_ms": 0, "end_ms": 6000}],
