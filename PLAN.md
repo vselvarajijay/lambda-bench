@@ -692,7 +692,7 @@ lambda-duplex/
 | `license-auditor` | Stays read-only. It returns a proposed notices patch, and `docs-writer` applies it. Model becomes `sonnet`, because license reading needs judgment. |
 | `reuse-scout` | Stays read-only and returns map updates for `architect`. A hook blocks mutating Bash. |
 | `sim-auditor` | Bash may run the CLI and write only under `runs/` and `reports/`. |
-| All | **Check tool names at creation.** This session exposes no separate Grep, Glob or WebFetch tools, so slice 1.7 confirms them or switches to hook-guarded Bash. |
+| All | Agents without write access search through guarded read-only Bash, because some Claude Code builds expose no separate Grep or Glob tools. `.claude/hooks/guard.py` enforces each agent profile. |
 
 ---
 
@@ -783,10 +783,10 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.7: Subagents and guardrails `[gate]`
 
-- [ ] Create the approved agents from Appendix A, after confirming tool names.
-- [ ] Add hooks for write scopes, read-only Bash and held-out access.
-- [ ] Add a `review-required` CI check for `src/lambda_duplex/metrics/**`, `src/lambda_duplex/counterpart/**`, `suites/*/{policy,checks}.py`, scenario data and core interfaces.
-- [ ] Update `ci-watcher` so it treats that check as blocking.
+- [x] Create the approved agents from Appendix A, after confirming tool names.
+- [x] Add hooks for write scopes, read-only Bash and held-out access.
+- [x] Add a `review-required` CI check for `src/lambda_duplex/metrics/**`, `src/lambda_duplex/counterpart/**`, `suites/*/{policy,checks}.py`, scenario data and core interfaces.
+- [x] Update `ci-watcher` so it treats that check as blocking.
 - **Run:** `uv run python scripts/check_agents.py`
 - **Test:** hook tests prove blocked writes, blocked test-split reads and allowed paths.
 - **Done when:** a test PR touching metrics cannot pass without a recorded independent review.
@@ -1155,7 +1155,7 @@ Continue with the first unchecked slice in section 13.
 
 # Appendix A: Subagent definitions
 
-Created in slice 1.7. Each block is the full content of `.claude/agents/<name>.md`, apart from hook wiring, which slice 1.7 adds after confirming the supported format.
+Created in slice 1.7. Each block is the agent prompt and tool list. The files in `.claude/agents/` add the matching guard hook.
 
 ## architect
 
@@ -1163,7 +1163,7 @@ Created in slice 1.7. Each block is the full content of `.claude/agents/<name>.m
 ---
 name: architect
 description: Owns PLAN.md, the suite plugin interface, adapter interface, results schema, and design sign-offs. Use for any proposed core interface change.
-tools: Read, Grep, Glob, WebFetch, Write, Edit
+tools: Read, Bash, Grep, Glob, WebFetch, Write, Edit
 model: opus
 ---
 
@@ -1290,7 +1290,7 @@ Guardrails:
 ---
 name: suite-author
 description: Drafts suite scenarios, hidden stories, unlock conditions, personas, and scripted moments for independent review.
-tools: Read, Write, Edit, Grep, Glob
+tools: Read, Bash, Write, Edit, Grep, Glob
 model: opus
 ---
 
@@ -1315,7 +1315,7 @@ Guardrails:
 ---
 name: scenario-reviewer
 description: Independently validates scenarios for leaks, reachability, tier quality, contradictions, split safety, and fairness.
-tools: Read, Grep, Glob
+tools: Read, Bash, Grep, Glob
 model: opus
 ---
 
@@ -1388,7 +1388,7 @@ Guardrails:
 ---
 name: license-auditor
 description: Audits licenses and terms for dependencies, copied code, model weights, datasets, noise, voices, TTS output, and provider APIs.
-tools: Read, Grep, Glob, WebFetch
+tools: Read, Bash, Grep, Glob, WebFetch
 model: sonnet
 ---
 
@@ -1413,7 +1413,7 @@ Guardrails:
 ---
 name: docs-writer
 description: Writes README, contribution guides, suite and adapter guides, datasheets, notices, and benchmark limitations.
-tools: Read, Write, Edit, Grep, Glob
+tools: Read, Bash, Write, Edit, Grep, Glob
 model: sonnet
 ---
 
