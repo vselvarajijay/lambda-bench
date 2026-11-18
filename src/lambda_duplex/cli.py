@@ -14,6 +14,7 @@ from pathlib import Path
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter
+from lambda_duplex.metrics.report import build_report, format_report
 from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
 from lambda_duplex.suites.loader import (
@@ -25,7 +26,14 @@ from lambda_duplex.suites.loader import (
 )
 from lambda_duplex.suites.runtime import mock_for, run_scenario
 from lambda_duplex.trajectory.replay import verify_run
-from lambda_duplex.trajectory.store import RunSpec, TrajectoryError, find_run_dirs, write_run
+from lambda_duplex.trajectory.seeds import stream_seed
+from lambda_duplex.trajectory.store import (
+    RunSpec,
+    TrajectoryError,
+    find_run_dirs,
+    load_run,
+    write_run,
+)
 
 MINIMUM_PYTHON = (3, 12)
 DEFAULT_SUITE_TICKS = 3000
@@ -97,7 +105,17 @@ def _stored_suite_reference(reference: str, name: str) -> str:
     return name if Path(reference).is_absolute() else reference
 
 
+def _trial_seed(seed: int, scenario_id: str, trial: int) -> int:
+    """Keep trial zero on the requested seed and derive independent later seeds."""
+    if trial == 0:
+        return seed
+    return stream_seed(seed, f"trial:{scenario_id}:{trial}") % (2**31)
+
+
 def _run_suite(args: argparse.Namespace) -> int:
+    if args.k < 1:
+        print("--k must be at least 1", file=sys.stderr)
+        return 2
     model, _, behavior = args.model.partition(":")
     if model != "mock" or args.mode != "text":
         print("only mock models in text mode are available", file=sys.stderr)
@@ -115,47 +133,65 @@ def _run_suite(args: argparse.Namespace) -> int:
         return 2
     exit_code = 0
     suite_ticks = DEFAULT_SUITE_TICKS if args.ticks is None else args.ticks
+    behaviors = (behavior or "good").split("+")
     for scenario in scenarios:
-        try:
-            adapter = mock_for(loaded.suite, scenario, behavior or "good")
-        except ValueError as error:
-            print(error, file=sys.stderr)
-            return 2
-        run = asyncio.run(
-            run_scenario(loaded.suite, scenario, adapter, seed=args.seed, max_ticks=suite_ticks)
-        )
-        if args.out is not None:
-            spec = RunSpec(
-                _stored_suite_reference(args.suite, loaded.suite.manifest.name),
-                args.model,
-                args.mode,
-                args.seed,
-                suite_ticks,
-                run.trajectory.tick_ms,
-                loaded.suite.manifest.default_condition,
-            )
+        for trial in range(args.k):
+            seed = _trial_seed(args.seed, scenario.id, trial)
             try:
-                write_run(
-                    args.out / f"{scenario.id}__seed{args.seed}",
-                    loaded.suite,
-                    spec,
-                    adapter.describe(),
-                    run.trajectory,
-                    run.result,
-                    run.decision,
-                )
-            except TrajectoryError as error:
+                adapter = mock_for(loaded.suite, scenario, behaviors[trial % len(behaviors)])
+            except ValueError as error:
                 print(error, file=sys.stderr)
                 return 2
-        _print_events(run.outcome)
-        passed = str(run.decision.passed).lower()
-        print(
-            f"scenario={scenario.id} status={run.outcome.status} "
-            f"ended_by={run.outcome.ended_by} passed={passed}"
-        )
-        if run.outcome.status != "completed":
-            exit_code = 1
+            run = asyncio.run(
+                run_scenario(loaded.suite, scenario, adapter, seed=seed, max_ticks=suite_ticks)
+            )
+            if args.out is not None:
+                spec = RunSpec(
+                    _stored_suite_reference(args.suite, loaded.suite.manifest.name),
+                    args.model,
+                    args.mode,
+                    seed,
+                    suite_ticks,
+                    run.trajectory.tick_ms,
+                    loaded.suite.manifest.default_condition,
+                )
+                try:
+                    write_run(
+                        args.out / f"{scenario.id}__seed{args.seed}__trial{trial}",
+                        loaded.suite,
+                        spec,
+                        adapter.describe(),
+                        run.trajectory,
+                        run.result,
+                        run.decision,
+                    )
+                except TrajectoryError as error:
+                    print(error, file=sys.stderr)
+                    return 2
+            if args.k == 1:
+                _print_events(run.outcome)
+            passed = str(run.decision.passed).lower()
+            print(
+                f"scenario={scenario.id} trial={trial} status={run.outcome.status} "
+                f"ended_by={run.outcome.ended_by} passed={passed}"
+            )
+            if run.outcome.status != "completed":
+                exit_code = 1
     return exit_code
+
+
+def _report(args: argparse.Namespace) -> int:
+    paths = find_run_dirs(args.path)
+    if not paths:
+        print(f"no runs found in {args.path}", file=sys.stderr)
+        return 2
+    try:
+        report = build_report(load_run(path) for path in paths)
+    except TrajectoryError as error:
+        print(error, file=sys.stderr)
+        return 2
+    print(json.dumps(report, indent=2, sort_keys=True) if args.json else format_report(report))
+    return 0
 
 
 def _replay(args: argparse.Namespace) -> int:
@@ -237,6 +273,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--split", choices=("dev", "test"), default="dev")
     run.add_argument("--scenario")
     run.add_argument("--out", type=Path, help="directory for stored run data")
+    run.add_argument("--k", type=int, default=1, help="trials per scenario")
+    report = commands.add_parser("report", help="summarize stored runs")
+    report.add_argument("path", type=Path)
+    report.add_argument("--json", action="store_true", help="print machine-readable output")
     replay = commands.add_parser("replay", help="verify stored runs")
     replay.add_argument("path", type=Path)
     replay.add_argument("--verify", action="store_true", help="rescore and replay the run")
@@ -258,6 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "report":
+        return _report(args)
     if args.command == "replay":
         if not args.verify:
             parser.error("replay currently requires --verify")

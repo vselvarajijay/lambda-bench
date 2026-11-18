@@ -769,7 +769,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.5: Results, pass^k and report
 
-- [ ] Check runner, `RunResult`, pass^k, clustered bootstrap, terminal and JSON reports.
+- [x] Check runner, `RunResult`, pass^k, clustered bootstrap, terminal and JSON reports.
 - **Run:** `uv run lambda-duplex run --suite demo --model mock --mode text --k 4 --out runs/k4 && uv run lambda-duplex report runs/k4`
 - **Test:** `pytest tests/metrics/test_pass_k.py` uses hand-computed values, including τ-bench's formula cases.
 - **Done when:** a mock with 3 of 4 passing gives `pass^4 = 0`, `pass^3 = 0.25`, and the report states that.
