@@ -1,0 +1,15 @@
+id: script_001
+version: 1
+split: dev
+end_tick: 95
+turns:
+  5: medium
+  30: long
+  56: long
+  78: medium
+model:
+  14: long
+  33: backchannel
+  42: long
+  58: long
+  73: long
