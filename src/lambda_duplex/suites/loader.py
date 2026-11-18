@@ -24,11 +24,43 @@ CORE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "required": ["id", "version", "split"],
     "properties": {
-        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$"},
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(?![\\s\\S])"},
         "version": {"type": "integer", "minimum": 1},
         "split": {"enum": ["dev", "test"]},
     },
 }
+
+
+class ScenarioLoader(yaml.SafeLoader):
+    """YAML loader that rejects ambiguous scenario structure."""
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        if self.check_event(yaml.AliasEvent):
+            event = self.peek_event()  # type: ignore[no-untyped-call]
+            raise yaml.constructor.ConstructorError(
+                None, None, "YAML aliases are not allowed", event.start_mark
+            )
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> dict[Any, Any]:
+        keys = set()
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=True)
+            if key in keys:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"duplicate key {key!r}", key_node.start_mark
+                )
+            keys.add(key)
+        return super().construct_mapping(node, deep)
+
+
+def _construct_scenario_mapping(loader: ScenarioLoader, node: Any) -> dict[Any, Any]:
+    return loader.construct_mapping(node, deep=True)
+
+
+ScenarioLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_scenario_mapping
+)
 
 
 class SuiteError(RuntimeError):
@@ -114,7 +146,9 @@ def list_suites(start: Path | None = None) -> list[str]:
 
 
 def _schema_issues(suite: Suite, raw: Mapping[str, Any]) -> list[Issue]:
-    schema = {"allOf": [CORE_SCHEMA, dict(suite.scenario_schema())]}
+    suite_schema = dict(suite.scenario_schema())
+    suite_schema.setdefault("$id", f"urn:lambda-duplex:suite:{suite.manifest.name}")
+    schema = {"allOf": [CORE_SCHEMA, suite_schema]}
     try:
         jsonschema.Draft202012Validator.check_schema(schema)
     except jsonschema.SchemaError as error:
@@ -178,8 +212,8 @@ def load_scenario_files(loaded: LoadedSuite, split: Split = "dev") -> list[Scena
         raise SuiteError(f"{loaded.suite.manifest.name} has no scenarios in split {split}")
     for path in paths:
         try:
-            raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as error:
+            raw = yaml.load(path.read_text(encoding="utf-8"), Loader=ScenarioLoader)
+        except (yaml.YAMLError, RecursionError, TypeError, ValueError) as error:
             files.append(ScenarioFile(path, None, (Issue("$", f"invalid YAML: {error}"),)))
             continue
         result = validate_scenario_data(loaded, raw, split)

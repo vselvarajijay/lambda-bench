@@ -355,26 +355,27 @@ The final JSON Schema lives at `suites/interviewer/schema.json`. Field summary:
 | `id`, `version`, `genre`, `split` | Required. `genre` is one of `product_discovery`, `ux_debrief`, `ad_feedback`, `churn_win_loss`, `workplace_research`. |
 | `brief.full` | Objective, required topics, time budget, context. |
 | `brief.compact` | Same intent in at most 120 words. |
-| `brief.required_topics[]` | `id`, `label`, `description`. |
-| `hidden_story.facts[]` | `id`, `content`, `topic`, `tier`, `weight?`, `unlock`, `paraphrases[]`. |
+| `brief.required_topics[]` | `id`, `label`, `description`, `key?`. |
+| `hidden_story.facts[]` | `id`, `content`, `topic`, `tier`, `weight?`, `unlock`, and at least two `paraphrases`. |
 | `hidden_story.contradictions[]` | Pairs of statements used by scripted moments. |
-| `persona` | Traits, voice ID, delay and interruption settings, audio defaults. |
-| `scripted_moments[]` | `id`, `type`, `trigger`, `script`, `success`, `severity`, `memory_distance`. |
+| `persona` | Traits, voice ID, delay and interruption settings. Audio settings come from the condition. |
+| `scripted_moments[]` | `id`, `type`, `trigger`, `script?`, `success`, `severity`, `memory_distance?` (required for contradictions). |
 | `pass` | Optional overrides within limits set by the suite. |
 
 **Unlock expression grammar**
 
 - `all`, `any` and `not` combine predicates.
-- **Rule predicates:** `disclosed(fact)`, `silence_after_trailoff(min_s)`, `elapsed_since(event, min_s)`, `no_interruption_since(event)`, `rapport_at_least(n)`.
+- **Rule predicates:** `disclosed(fact)`, `silence_after_trailoff(fact, min_s)`, `elapsed_since(event, min_s)`, `no_interruption_since(event)`.
 - **Classified predicates:** `asked_about(topic)`, `followed_up_on(fact)`, `open_ended()`, `not_leading()`, `acknowledged(event)`.
+- Exact meanings are in `docs/design/0005-interviewer-scenarios.md`.
 
 ### 9.2 Worked example
 
 ```yaml
 id: ad_feedback_0007
-version: 1
-genre: ad_feedback
+version: 2
 split: dev
+genre: ad_feedback
 brief:
   full: >
     You are interviewing someone who just watched a 30-second ad for Northline, a
@@ -388,7 +389,7 @@ brief:
     likely action. About eight minutes. Stay neutral.
   required_topics:
     - {id: takeaway, label: Main takeaway, description: What the viewer thinks the ad says}
-    - {id: emotion, label: Emotional reaction, description: How the ad made them feel}
+    - {id: emotion, label: Emotional reaction, description: How the ad made them feel, key: true}
     - {id: action, label: Purchase intent, description: What they might do next}
   time_budget_s: 480
 hidden_story:
@@ -397,38 +398,68 @@ hidden_story:
       topic: takeaway
       tier: surface
       content: They think the ad is about staying comfortable during outages.
+      paraphrases:
+        - Its message seemed to be comfort when the power goes out.
+        - They took it as being at ease through an outage.
       unlock: {asked_about: takeaway}
     - id: f2
       topic: emotion
       tier: probe
       content: The kitchen scene felt tense rather than cozy.
+      paraphrases:
+        - Cooking in that scene seemed stressful, not warm.
+        - The meal looked anxious instead of comforting.
       unlock:
         all:
-          - {asked_about: emotion}
+          - {disclosed: f5}
+          - {followed_up_on: f5}
           - {open_ended: true}
     - id: f3
       topic: emotion
       tier: deep
-      content: A three-day outage last winter left their father without his oxygen machine.
+      content: A three-day outage last winter cut power to their father's home oxygen equipment; he got through it safely, but it frightened them.
+      paraphrases:
+        - Their dad's oxygen machine lost power for days last winter, which scared them even though he was safe.
+        - Last winter's long blackout threatened their father's breathing equipment; he stayed safe, but they were shaken.
       unlock:
         all:
           - {disclosed: f2}
           - {followed_up_on: f2}
           - any:
-              - {silence_after_trailoff: {min_s: 2.0}}
-              - {rapport_at_least: 2}
+              - {silence_after_trailoff: {fact: f2, min_s: 2.0}}
+              - {acknowledged: {moment: m1}}
     - id: f4
       topic: action
       tier: probe
       content: They would only consider it if a landlord allowed installation.
+      paraphrases:
+        - Their landlord would have to approve putting one in.
+        - Buying depends on getting permission for the installation.
       unlock:
         all:
-          - {asked_about: action}
+          - {disclosed: f6}
+          - {followed_up_on: f6}
           - {not_leading: true}
+    - id: f5
+      topic: emotion
+      tier: surface
+      content: The ad left them a little uneasy.
+      paraphrases:
+        - It made them somewhat uncomfortable.
+        - They came away slightly unsettled.
+      unlock: {asked_about: emotion}
+    - id: f6
+      topic: action
+      tier: surface
+      content: They might look up what a home battery costs.
+      paraphrases:
+        - Checking the price is the most they would do now.
+        - They could search for how much one of these runs.
+      unlock: {asked_about: action}
   contradictions:
     - id: c1
-      first: "I don't really worry about outages."
-      second: "I check the outage map every time it storms."
+      first: "I didn't really pay attention to the tagline."
+      second: "\"Keep your evening\" is the line that stuck with me."
 persona:
   id: guarded_pauser
   traits: [guarded, mid_thought_pauser]
@@ -445,7 +476,10 @@ scripted_moments:
     severity: hard
   - id: m2
     type: contradiction
-    trigger: {after_event: {disclosed: f1}, min_elapsed_s: 45}
+    trigger:
+      after_event: {disclosed: f1}
+      min_elapsed_s: 45
+      max_elapsed_s: 85
     script: {use: c1}
     success: {classified: probed_contradiction, within_turns: 2}
     severity: soft
@@ -473,7 +507,7 @@ scripted_moments:
 | Control | Method |
 |---|---|
 | Locked-fact check | Every output is checked against locked facts, by span tags and an independent classifier. |
-| Contradiction and invention check | Replies are compared with the hidden story and earlier replies. |
+| Contradiction and invention check | Replies are compared with the hidden story and earlier replies, except contradiction lines declared by the scenario. |
 | Pinned versions | Model, prompt, classifier and TTS versions are recorded. |
 | Reference interviewers | See section 9.5. |
 | Human audit | Sampled transcripts and audio are reviewed. Target: under 2% locked-fact leaks and no unresolved critical findings. |
@@ -487,7 +521,7 @@ Each scenario is run in text mode against these before acceptance:
 |---|---|
 | `oracle` (reads hidden unlock paths) | At least 95% recall. Proves that facts are reachable. |
 | `null` (stays silent or says "okay") | Near-zero probe and deep recall. |
-| `tell_me_more` (generic prompts only) | Must not reach the pass threshold. Protects against easy gaming. |
+| `tell_me_more` (may ask each brief topic once, then generic prompts) | Must not reach the pass threshold or disclose deep facts. Protects against easy gaming. |
 | `leading` (guesses facts in closed questions) | Must not unlock facts protected by `not_leading`. |
 
 ### 9.6 Metrics and pass definition
@@ -879,7 +913,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 3.1: Schema and validator
 
-- [ ] `schema.json`, static checks, the worked example as `dev/ad_feedback_0007.yaml`.
+- [x] `schema.json`, static checks, the worked example as `dev/ad_feedback_0007.yaml`.
 - **Run:** `uv run lambda-duplex suites validate interviewer --split dev`
 - **Test:** invalid fixtures cover a hidden-fact leak in the brief, unknown references, cycles and an unreachable deep fact.
 - **Done when:** the example passes and every invalid fixture fails with a useful message.

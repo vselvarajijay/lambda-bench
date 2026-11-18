@@ -1,0 +1,117 @@
+id: ad_feedback_0007
+version: 2
+split: dev
+genre: ad_feedback
+brief:
+  full: >
+    You are interviewing someone who just watched a 30-second ad for Northline, a
+    home battery brand. The ad shows a family cooking during a neighborhood blackout
+    while their lights stay on. It ends with "Keep your evening." Learn what they
+    took from the ad, how it felt, and whether it would change what they do.
+    Spend about eight minutes. Do not give your own opinion.
+  compact: >
+    Interview a viewer about a 30-second Northline home battery ad: family cooks
+    through a blackout, tagline "Keep your evening." Cover takeaway, feelings, and
+    likely action. About eight minutes. Stay neutral.
+  required_topics:
+    - {id: takeaway, label: Main takeaway, description: What the viewer thinks the ad says}
+    - {id: emotion, label: Emotional reaction, description: How the ad made them feel, key: true}
+    - {id: action, label: Purchase intent, description: What they might do next}
+  time_budget_s: 480
+hidden_story:
+  facts:
+    - id: f1
+      topic: takeaway
+      tier: surface
+      content: They think the ad is about staying comfortable during outages.
+      paraphrases:
+        - Its message seemed to be comfort when the power goes out.
+        - They took it as being at ease through an outage.
+      unlock: {asked_about: takeaway}
+    - id: f2
+      topic: emotion
+      tier: probe
+      content: The kitchen scene felt tense rather than cozy.
+      paraphrases:
+        - Cooking in that scene seemed stressful, not warm.
+        - The meal looked anxious instead of comforting.
+      unlock:
+        all:
+          - {disclosed: f5}
+          - {followed_up_on: f5}
+          - {open_ended: true}
+    - id: f3
+      topic: emotion
+      tier: deep
+      content: A three-day outage last winter cut power to their father's home oxygen equipment; he got through it safely, but it frightened them.
+      paraphrases:
+        - Their dad's oxygen machine lost power for days last winter, which scared them even though he was safe.
+        - Last winter's long blackout threatened their father's breathing equipment; he stayed safe, but they were shaken.
+      unlock:
+        all:
+          - {disclosed: f2}
+          - {followed_up_on: f2}
+          - any:
+              - {silence_after_trailoff: {fact: f2, min_s: 2.0}}
+              - {acknowledged: {moment: m1}}
+    - id: f4
+      topic: action
+      tier: probe
+      content: They would only consider it if a landlord allowed installation.
+      paraphrases:
+        - Their landlord would have to approve putting one in.
+        - Buying depends on getting permission for the installation.
+      unlock:
+        all:
+          - {disclosed: f6}
+          - {followed_up_on: f6}
+          - {not_leading: true}
+    - id: f5
+      topic: emotion
+      tier: surface
+      content: The ad left them a little uneasy.
+      paraphrases:
+        - It made them somewhat uncomfortable.
+        - They came away slightly unsettled.
+      unlock: {asked_about: emotion}
+    - id: f6
+      topic: action
+      tier: surface
+      content: They might look up what a home battery costs.
+      paraphrases:
+        - Checking the price is the most they would do now.
+        - They could search for how much one of these runs.
+      unlock: {asked_about: action}
+  contradictions:
+    - id: c1
+      first: "I didn't really pay attention to the tagline."
+      second: "\"Keep your evening\" is the line that stuck with me."
+persona:
+  id: guarded_pauser
+  traits: [guarded, mid_thought_pauser]
+  voice_id: dev_voice_03
+  response_delay_ms: {mean: 650, sd: 180}
+  interruptiveness: 0.15
+  patience: 0.7
+scripted_moments:
+  - id: m1
+    type: mid_thought_pause
+    trigger: {on_disclosed: f2}
+    script: "It just felt... [pause 3.0] I don't know, a little close to home."
+    success: {no_substantive_onset_during_pause: true}
+    severity: hard
+  - id: m2
+    type: contradiction
+    trigger:
+      after_event: {disclosed: f1}
+      min_elapsed_s: 45
+      max_elapsed_s: 85
+    script: {use: c1}
+    success: {classified: probed_contradiction, within_turns: 2}
+    severity: soft
+    memory_distance: near
+  - id: m3
+    type: emotional_disclosure
+    trigger: {on_disclosed: f3}
+    success: {classified: acknowledged_before_moving_on, within_turns: 1}
+    severity: soft
