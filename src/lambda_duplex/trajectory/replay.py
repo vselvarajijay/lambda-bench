@@ -137,6 +137,8 @@ async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
     settings = stored.manifest["run"]
     mode: GatewayMode = "replay" if stored.llm_entries else "off"
     audio = stored.manifest.get("audio")
+    if settings["mode"] == "audio" and audio is None:
+        raise TrajectoryError("audio run has no audio manifest")
     model = RecordedModel(stored)
     speech = None
     if audio is not None:

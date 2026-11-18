@@ -442,3 +442,17 @@ def test_zero_tick_audio_run_replays(tmp_path: Path) -> None:
 def test_synthetic_speech_is_finite_at_other_rates() -> None:
     assert sample_count(SyntheticSpeech(sample_rate=44_100).render("hello")) > 0
     assert np.isfinite(SyntheticSpeech(sample_rate=44_100)._word("hello", 0)).all()
+
+
+def test_audio_run_without_audio_manifest_is_rejected(tmp_path: Path) -> None:
+    out = tmp_path / "runs"
+    arguments = ["run", "--suite", str(DEMO), "--model", "mock:bad", "--mode", "audio"]
+    extra = ["--audio-backend", "synthetic", "--ticks", "20", "--out", str(out)]
+    assert cli.main([*arguments, *extra]) == 0
+    path = find_run_dirs(out)[0]
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    del manifest["audio"]
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(TrajectoryError, match="no audio manifest"):
+        asyncio.run(verify_run(path, load_suite(str(DEMO)).suite))
