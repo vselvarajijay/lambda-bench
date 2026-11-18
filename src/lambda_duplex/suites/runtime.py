@@ -13,7 +13,7 @@ from typing import Any, Protocol
 
 from lambda_duplex.adapters.base import MediaFrame, ModelAdapter
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
-from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, PlayoutBuffer
+from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, PlayoutBuffer, sample_count
 from lambda_duplex.llm import LLMGateway
 from lambda_duplex.orchestrator import (
     DrainedEvent,
@@ -64,6 +64,7 @@ class _Playback:
     segment_id: int
     start_tick: int
     audio: PlayoutBuffer | None
+    duration_ms: float
     last_played_tick: int | None = None
 
 
@@ -108,6 +109,20 @@ class PolicyCounterpart:
         pause_ticks = math.ceil(segment.pause_after_ms / self._clock.tick_ms)
         self._hold_until_tick = end_tick + 1 + (0 if interrupted else pause_ticks)
         self._record(self._policy.on_delivered(span), "delivery")
+        played_ms = (end_tick - playback.start_tick + 1) * self._clock.tick_ms
+        self._events.append(
+            (
+                "segment_delivered",
+                "core",
+                {
+                    "segment_id": span.segment_id,
+                    "start_tick": span.start_tick,
+                    "end_tick": span.end_tick,
+                    "duration_ms": played_ms if interrupted else playback.duration_ms,
+                    "interrupted": interrupted,
+                },
+            )
+        )
 
     def _accept(self, output: PolicyOutput | None) -> None:
         if output is None:
@@ -125,10 +140,13 @@ class PolicyCounterpart:
     def _start_next(self, tick: int) -> _Playback:
         segment = self._queue.popleft()
         audio = None
+        duration_ms = float(self._clock.tick_ms)
         if self._speech is not None:
+            pcm = self._speech.render(segment.text)
             audio = PlayoutBuffer(self._samples_per_tick)
-            audio.push(self._speech.render(segment.text))
-        playback = _Playback(segment, self._next_segment_id, tick, audio)
+            audio.push(pcm)
+            duration_ms = sample_count(pcm) * 1000 / INTERNAL_SAMPLE_RATE
+        playback = _Playback(segment, self._next_segment_id, tick, audio, duration_ms)
         self._next_segment_id += 1
         self._playing = playback
         return playback

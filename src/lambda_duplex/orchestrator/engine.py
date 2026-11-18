@@ -150,7 +150,8 @@ class Orchestrator:
 
     def _drain_suite_events(self) -> None:
         for event_type, origin, data in self._counterpart.drain_events():
-            self._append("suite", event_type, data, origin)
+            source = "counterpart" if origin == "core" else "suite"
+            self._append(source, event_type, data, None if origin == "core" else origin)
 
     async def _counterpart_turn(self, pending: MediaFrame | None, tick: int) -> MediaFrame | None:
         """Deliver model output, then return counterpart media unless it has finished."""

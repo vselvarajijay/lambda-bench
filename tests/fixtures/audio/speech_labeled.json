@@ -1,0 +1,41 @@
+{
+  "sample_rate": 16000,
+  "segments": [
+    {
+      "start_ms": 500,
+      "end_ms": 2000
+    },
+    {
+      "start_ms": 2700,
+      "end_ms": 3500
+    },
+    {
+      "start_ms": 4100,
+      "end_ms": 4400
+    },
+    {
+      "start_ms": 5100,
+      "end_ms": 5350
+    },
+    {
+      "start_ms": 6150,
+      "end_ms": 7350
+    },
+    {
+      "start_ms": 7750,
+      "end_ms": 8350
+    },
+    {
+      "start_ms": 9250,
+      "end_ms": 9450
+    },
+    {
+      "start_ms": 10150,
+      "end_ms": 12150
+    },
+    {
+      "start_ms": 12750,
+      "end_ms": 13150
+    }
+  ]
+}

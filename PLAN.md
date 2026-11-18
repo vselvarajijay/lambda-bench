@@ -259,7 +259,7 @@ All are computed from timelines, not transcripts.
 
 - `C`: counterpart turns from the simulator plan, with exact word and pause times.
 - `M`: model speech from Silero on the isolated model track at 16 kHz, 32 ms windows.
-- Starting VAD parameters: threshold 0.5, minimum speech 120 ms, minimum silence 200 ms, padding 30 ms. Silero's 250 ms default could miss short backchannels, so slice 2.2 calibrates against labeled clips.
+- Starting VAD parameters: threshold 0.5, minimum speech 120 ms, minimum silence 200 ms, no padding. On the labeled fixture from slice 2.2, padding raised median boundary error from 11 ms to 33 ms.
 - Model segments separated by less than 500 ms form a model turn.
 - **Backchannel:** an isolated model segment shorter than 1.0 s. If a transcript exists, it also has at most 3 words.
 - **Substantive model onset:** the start of a model turn that is not a backchannel.
@@ -572,7 +572,8 @@ At about 840 counterpart words per call, a full run needs roughly 4.5 million TT
 runs/<run_id>/
   manifest.json        # versions, seeds, hashes, capabilities, clock mode
   audio/{model,counterpart_clean,counterpart_degraded,mix}.flac
-  timeline.parquet     # VAD probabilities and segments
+  timeline.json        # speech segments and VAD settings
+  timeline.npz         # VAD probabilities
   transcript.jsonl     # text, source, timestamps
   events.jsonl         # orchestrator and suite events
   llm_cache.jsonl      # gateway requests and responses
@@ -807,7 +808,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.2: VAD timeline
 
-- [ ] Silero ONNX wrapper, stored probabilities, segment generation, calibration script.
+- [x] Silero ONNX wrapper, stored probabilities, segment generation, calibration script.
 - **Run:** `uv run lambda-duplex timeline runs/a1 --plot runs/a1/timeline.png`
 - **Test:** `pytest tests/audio/test_vad.py` on committed short clips with labels.
 - **Done when:** boundary error has median at most 60 ms, and backchannel-length speech is detected on the fixture set.

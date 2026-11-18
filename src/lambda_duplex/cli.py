@@ -216,6 +216,33 @@ def _new_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def _timeline(args: argparse.Namespace) -> int:
+    paths = find_run_dirs(args.path)
+    if not paths:
+        print(f"no runs found in {args.path}", file=sys.stderr)
+        return 2
+    if args.plot is not None and len(paths) != 1:
+        print("--plot requires exactly one run", file=sys.stderr)
+        return 2
+    from lambda_duplex.audio.timeline import build_timeline, load_probabilities, plot_timeline
+    from lambda_duplex.audio.vad import SileroVad
+
+    vad = SileroVad()
+    for path in paths:
+        try:
+            timeline = build_timeline(path, vad)
+        except TrajectoryError as error:
+            print(error, file=sys.stderr)
+            return 2
+        print(
+            f"{path}: model_segments={len(timeline['model']['segments'])} "
+            f"counterpart_segments={len(timeline['counterpart']['segments'])}"
+        )
+        if args.plot is not None:
+            plot_timeline(timeline, load_probabilities(path), args.plot)
+    return 0
+
+
 def _report(args: argparse.Namespace) -> int:
     paths = find_run_dirs(args.path)
     if not paths:
@@ -311,6 +338,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--scenario")
     run.add_argument("--out", type=Path, help="directory for stored run data")
     run.add_argument("--k", type=int, default=1, help="trials per scenario")
+    timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
+    timeline.add_argument("path", type=Path)
+    timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
     new_suite = commands.add_parser("new-suite", help="create a suite from the template")
     new_suite.add_argument("name")
     new_suite.add_argument("--out", type=Path, help="destination directory")
@@ -338,6 +368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "timeline":
+        return _timeline(args)
     if args.command == "new-suite":
         return _new_suite(args)
     if args.command == "report":
