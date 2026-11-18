@@ -1,0 +1,29 @@
+# Seed rubric for the judge runner. Slice 5.3 replaces it with the full rubric.
+id: question_quality
+version: "0.1"
+instructions: >-
+  Score how well speaker A asks questions in this conversation. Judge only what was said,
+  not how fluent or pleasant it sounds.
+items:
+  - id: open_questions
+    prompt: Speaker A asks open questions that let the other speaker answer in their own words.
+    scale:
+      min: 1
+      max: 5
+    anchors:
+      - score: 1
+        text: Questions are almost all yes-or-no or answer themselves.
+      - score: 5
+        text: Questions consistently invite a full answer.
+    allow_na: true
+  - id: neutrality
+    prompt: Speaker A asks without steering the other speaker toward a particular answer.
+    scale:
+      min: 1
+      max: 5
+    anchors:
+      - score: 1
+        text: Questions repeatedly suggest the expected answer.
+      - score: 5
+        text: Questions stay neutral throughout.
+    allow_na: true
