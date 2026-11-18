@@ -20,6 +20,7 @@ from lambda_duplex.suites.base import (
     SuiteManifest,
 )
 
+from .simulate import simulate
 from .validation import validate_interview
 
 HIDDEN_KEYS = ("hidden_story", "scripted_moments", "persona", "pass")
@@ -49,6 +50,13 @@ class InterviewerSuite:
     def model_context(self, scenario: Scenario, capabilities: Capabilities) -> ModelContext:
         brief = scenario.data["brief"]
         return ModelContext(full=brief["full"], compact=brief["compact"])
+
+    def simulate_script(
+        self, scenario: Scenario, script: Mapping[str, Any]
+    ) -> Sequence[Mapping[str, Any]]:
+        if not isinstance(script, Mapping) or set(script) != {"steps"}:
+            raise ValueError("script must contain only steps")
+        return simulate(scenario, script["steps"])
 
     def create_policy(self, scenario: Scenario, context: RunContext) -> CounterpartPolicy:
         raise NotImplementedError("the interviewee policy is added in slice 3.3")

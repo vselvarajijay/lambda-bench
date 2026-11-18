@@ -282,6 +282,15 @@ class Suite(Protocol):
 
 
 @runtime_checkable
+class ScriptSimulator(Protocol):
+    """Optional suite hook for deterministic scenario debugging."""
+
+    def simulate_script(
+        self, scenario: Scenario, script: Mapping[str, Any]
+    ) -> Sequence[Mapping[str, Any]]: ...
+
+
+@runtime_checkable
 class MockScripted(Protocol):
     """Optional suite hook that supplies scripted mock behaviors."""
 

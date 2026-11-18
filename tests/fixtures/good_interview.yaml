@@ -1,0 +1,8 @@
+steps:
+  - utterance: {asked_about: [takeaway], open_ended: true, not_leading: true}
+  - utterance: {asked_about: [emotion], open_ended: true, not_leading: true}
+  - utterance: {followed_up_on: [f5], open_ended: true, not_leading: true}
+  - utterance: {followed_up_on: [f2], open_ended: true, not_leading: true}
+  - wait_s: 2.0
+  - utterance: {asked_about: [action], open_ended: true, not_leading: true}
+  - utterance: {followed_up_on: [f6], open_ended: true, not_leading: true}

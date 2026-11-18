@@ -200,6 +200,11 @@ def validate_scenario_data(loaded: LoadedSuite, raw: Any, split: Split) -> Scena
     return ScenarioFile(path, scenario, tuple(found))
 
 
+def load_yaml_file(path: Path) -> Any:
+    """Read YAML with the strict scenario loader."""
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=ScenarioLoader)
+
+
 def load_scenario_files(loaded: LoadedSuite, split: Split = "dev") -> list[ScenarioFile]:
     """Load and validate all scenarios in a split, including duplicate id checks."""
     if loaded.root is None:
@@ -212,7 +217,7 @@ def load_scenario_files(loaded: LoadedSuite, split: Split = "dev") -> list[Scena
         raise SuiteError(f"{loaded.suite.manifest.name} has no scenarios in split {split}")
     for path in paths:
         try:
-            raw = yaml.load(path.read_text(encoding="utf-8"), Loader=ScenarioLoader)
+            raw = load_yaml_file(path)
         except (yaml.YAMLError, RecursionError, TypeError, ValueError) as error:
             files.append(ScenarioFile(path, None, (Issue("$", f"invalid YAML: {error}"),)))
             continue

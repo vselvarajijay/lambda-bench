@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
 from lambda_duplex.counterpart.errors import NoiseAssetError
@@ -27,12 +29,15 @@ from lambda_duplex.metrics.conversation import (
 from lambda_duplex.metrics.report import build_report, format_report
 from lambda_duplex.orchestrator import MediaClock, Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
+from lambda_duplex.suites.base import ScriptSimulator
 from lambda_duplex.suites.loader import (
     SuiteError,
     list_suites,
     load_scenario_files,
     load_suite,
+    load_yaml_file,
     valid_scenarios,
+    validate_scenario_data,
 )
 from lambda_duplex.suites.runtime import ModelTranscriber, mock_for, run_scenario
 from lambda_duplex.suites.scaffold import ScaffoldError, create_suite
@@ -248,6 +253,37 @@ def _run_suite(args: argparse.Namespace) -> int:
             if run.outcome.status != "completed":
                 exit_code = 1
     return exit_code
+
+
+def _simulate_script(args: argparse.Namespace) -> int:
+    try:
+        loaded = load_suite(args.suite)
+        if not isinstance(loaded.suite, ScriptSimulator) or loaded.root is None:
+            raise SuiteError(f"{args.suite} does not support script simulation")
+        path = args.scenario if args.scenario.is_file() else loaded.root / args.scenario
+        split = path.parent.name
+        if split not in {"dev", "test"}:
+            raise SuiteError("scenario must be stored in a dev or test folder")
+        result = validate_scenario_data(loaded, load_yaml_file(path), split)
+        if result.issues or result.scenario is None:
+            problems = "; ".join(f"{item.path}: {item.message}" for item in result.issues)
+            raise SuiteError(f"invalid scenario: {problems}")
+        script = load_yaml_file(args.script)
+        rows = loaded.suite.simulate_script(result.scenario, script)
+    except (
+        KeyError,
+        OSError,
+        OverflowError,
+        RecursionError,
+        TypeError,
+        ValueError,
+        SuiteError,
+        yaml.YAMLError,
+    ) as error:
+        print(f"cannot simulate: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(list(rows), indent=2, sort_keys=True))
+    return 0
 
 
 def _new_suite(args: argparse.Namespace) -> int:
@@ -537,6 +573,12 @@ def build_parser() -> argparse.ArgumentParser:
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
+    interviewer = commands.add_parser("interviewer", help="debug interviewer scenarios")
+    interviewer_commands = interviewer.add_subparsers(dest="interviewer_command", required=True)
+    simulate = interviewer_commands.add_parser("simulate", help="run a disclosure script")
+    simulate.add_argument("scenario", type=Path)
+    simulate.add_argument("--script", type=Path, required=True)
+    simulate.add_argument("--suite", default="interviewer")
     new_suite = commands.add_parser("new-suite", help="create a suite from the template")
     new_suite.add_argument("name")
     new_suite.add_argument("--out", type=Path, help="destination directory")
@@ -575,6 +617,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _transcribe(args)
     if args.command == "timeline":
         return _timeline(args)
+    if args.command == "interviewer":
+        return _simulate_script(args)
     if args.command == "new-suite":
         return _new_suite(args)
     if args.command == "report":

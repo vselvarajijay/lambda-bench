@@ -52,6 +52,7 @@ packages = ["src/lambda_duplex"]
 addopts = "-ra --strict-markers -m 'not local'"
 markers = ["local: needs local models or hardware"]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 extend-exclude = ["*.md"]
