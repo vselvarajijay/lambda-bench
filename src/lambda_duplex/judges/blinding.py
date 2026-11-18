@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -124,9 +125,12 @@ def _transcript_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str] | No
             row = json.loads(line)
             if not isinstance(row["text"], str):
                 raise TypeError("text must be a string")
-            rows.append((float(row.get("start_ms", row.get("time_ms", 0))), row["text"]))
+            start_ms = float(row.get("start_ms", row.get("time_ms", 0)))
+            if not math.isfinite(start_ms):
+                raise ValueError("time must be finite")
+            rows.append((start_ms, row["text"]))
             sources.add(str(row.get("source", "unknown")))
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError) as error:
         raise TrajectoryError(f"invalid transcript in {path}: {error}") from error
     return rows, "transcript:" + "+".join(sorted(sources))
 
@@ -181,14 +185,19 @@ def _conversation_rows(run: StoredRun) -> tuple[list[tuple[float, int, str, str,
     return rows, source, delivery_known
 
 
-def _fingerprint(rows: Sequence[tuple[float, int, str, str, bool]]) -> str:
-    body = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+def _fingerprint(rows: Sequence[tuple[float, int, str, str, bool]], delivery_known: bool) -> str:
+    """Hash what a judge would read, ignoring timing and where the text came from."""
+    turns = [
+        [speaker, text.strip(), cut] for _, _, speaker, text, cut in rows if text.strip() or cut
+    ]
+    body = json.dumps([delivery_known, turns], separators=(",", ":"))
     return hashlib.sha256(body.encode()).hexdigest()
 
 
 def transcript_fingerprint(run: StoredRun) -> str:
     """Identify the conversation a judge would read, before any redaction."""
-    return _fingerprint(_conversation_rows(run)[0])
+    rows, _, delivery_known = _conversation_rows(run)
+    return _fingerprint(rows, delivery_known)
 
 
 def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> BlindedTranscript:
@@ -207,7 +216,7 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
         total += count
         if text or cut_off:
             turns.append(Turn(len(turns), speaker, text, cut_off))
-    fingerprint = _fingerprint(rows)
+    fingerprint = _fingerprint(rows, delivery_known)
     return BlindedTranscript(tuple(turns), source, total, terms, delivery_known, fingerprint)
 
 

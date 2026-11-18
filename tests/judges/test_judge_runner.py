@@ -1108,3 +1108,21 @@ def test_reference_forms_are_hidden(tmp_path: Path, reference: str, spoken: str)
     run.manifest["model"]["reference"] = reference
 
     assert redact(f"I am {spoken} now", identity_terms(run))[0] == "I am [REDACTED] now"
+
+
+def test_failed_pass_with_new_blind_term_keeps_the_score(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    first = judge(run, config())
+
+    outcome = judge(run, config(_outage, retries=0, blind_terms=("hello",)))
+
+    assert "kept the earlier scored judgment" in outcome.record["errors"]
+    assert load_judgments(run) == [first.record]
+
+
+def test_judge_refuses_a_special_file_without_hanging(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    os.mkfifo(run / "judges.jsonl")
+
+    with pytest.raises(JudgeError, match="not a regular file"):
+        load_judgments(run)

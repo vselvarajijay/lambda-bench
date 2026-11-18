@@ -103,7 +103,8 @@ def _composite(composite: Mapping[str, Any]) -> str:
     opening = f'<section class="composite" data-status="{_e(status)}"><h3>Composite</h3>'
     if status == "shown":
         summary = (
-            f"<p>Composite: <strong>{_e(format_interval(composite['interval']))}</strong>. "
+            "<p>Weighted sum of parts: "
+            f"<strong>{_e(format_interval(composite['interval']))}</strong>. "
             f"Not computed for {_e(composite['missing'])} runs.</p>"
         )
     else:
@@ -134,7 +135,7 @@ def _rubric(rubric: Mapping[str, Any]) -> str:
         ("Failed", rubric["failed"]),
         ("Unscorable", rubric["unscorable"]),
         ("Malformed", rubric["malformed"]),
-        ("Stale (transcript changed)", rubric["stale"]),
+        ("Stale (needs re-judging)", rubric["stale"]),
         ("Not judged", rubric["not_judged"]),
     )
     items = [

@@ -8,6 +8,7 @@ import stat
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -253,7 +254,7 @@ def test_stale_judgment_is_counted_and_not_scored(tmp_path: Path) -> None:
 
     assert (rubric["scored"], rubric["stale"], rubric["not_judged"]) == (2, 1, 0)
     assert "1 stale" in format_report(report)
-    assert "Stale (transcript changed)" in format_html(report)
+    assert "Stale (needs re-judging)" in format_html(report)
 
 
 def test_blind_terms_do_not_make_a_judgment_stale(tmp_path: Path) -> None:
@@ -308,7 +309,11 @@ def test_unreadable_judge_files_are_named(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "change",
-    [lambda result: result.update(status=None), lambda result: result.update(ended_by=["x"])],
+    [
+        lambda result: result.update(status=None),
+        lambda result: result.update(status=["x"]),
+        lambda result: result.update(ended_by=["x"]),
+    ],
 )
 def test_odd_status_values_do_not_stop_the_report(
     tmp_path: Path, change: Callable[[dict[str, Any]], Any]
@@ -492,3 +497,145 @@ def test_cli_report_failures(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     with pytest.raises(SystemExit):
         cli.main(["report", runs, "--json", "--format", "html"])
     assert cli.main(["report", runs, "--suite", DEMO]) == 0
+
+
+def add_second_check(result: dict[str, Any]) -> None:
+    template = next(check for check in result["checks"] if check["id"] == CHECK)
+    result["checks"].append({**template, "id": "second", "value": 0.25})
+
+
+def test_composite_adds_every_weighted_part(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good", judged=False)
+    for run in runs:
+        edit_json(run / "result.json", add_second_check)
+
+    report = report_for(tmp_path / "runs", CompositeSuite({CHECK: 0.5, "second": 2.0}))
+    composite = report["groups"][0]["composite"]
+
+    assert composite["interval"]["estimate"] == pytest.approx(1.0)
+    assert composite["method"] == "weighted_sum_of_parts"
+    text = format_report(report)
+    assert "weighted sum of parts" in text and "part second" in text
+    assert "Weighted sum of parts" in format_html(report)
+
+
+def test_cli_suite_supplies_composite_weights(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_runs(tmp_path / "runs", judged=False)
+    loaded = SimpleNamespace(suite=CompositeSuite({CHECK: 1.0}))
+    monkeypatch.setattr(cli, "load_suite", lambda reference: loaded)
+    capsys.readouterr()
+
+    assert cli.main(["report", str(tmp_path / "runs"), "--suite", "chosen"]) == 0
+    assert "composite (weighted sum of parts)" in capsys.readouterr().out
+
+
+def test_invalid_runs_stay_out_of_composite_but_in_validity(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good", judged=False)
+
+    def invalidate(result: dict[str, Any]) -> None:
+        result["status"] = "counterpart_error"
+        result["ended_by"] = "error"
+        clear_check(result)
+
+    edit_json(runs[0] / "result.json", invalidate)
+
+    group = group_for(tmp_path / "runs", CompositeSuite({CHECK: 1.0}))
+
+    assert group["composite"]["missing"] == 0
+    assert group["composite"]["interval"]["estimate"] == 1.0
+    assert sum(group["validity"]["ended_by"].values()) == 3
+    assert group["validity"]["checks_not_computed"] == 0
+
+
+def test_part_with_no_values_withholds_the_composite(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good", judged=False)
+    for run in runs:
+        edit_json(run / "result.json", clear_check)
+
+    composite = group_for(tmp_path / "runs", CompositeSuite({CHECK: 1.0}))["composite"]
+
+    assert composite["status"] == "withheld"
+    assert CHECK in composite["reason"]
+
+
+def test_mixed_suite_versions_have_no_composite(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", judged=False)
+    edit_json(runs[0] / "manifest.json", lambda m: m["suite"].update(version="other"))
+
+    composite = group_for(tmp_path / "runs", CompositeSuite({CHECK: 1.0}))["composite"]
+
+    assert composite["status"] == "unavailable"
+
+
+def test_transcribing_the_same_words_is_not_stale(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good")
+
+    assert cli.main(["transcribe", str(runs[0]), "--backend", "injected"]) == 0
+
+    rubric = group_for(tmp_path / "runs")["judges"]["rubrics"][0]
+    assert (rubric["scored"], rubric["stale"]) == (3, 0)
+
+
+def test_judgment_without_a_fingerprint_is_stale(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good")
+    edit_judgment(runs[0], lambda row: row["transcript"].pop("input_sha256"))
+
+    assert group_for(tmp_path / "runs")["judges"]["rubrics"][0]["stale"] == 1
+
+
+def test_seeds_are_reported_apart(tmp_path: Path) -> None:
+    out = tmp_path / "runs"
+    make_runs(out, "mock:good")
+    arguments = ["judge", str(out), "--rubric", "question_quality", "--provider", "fake"]
+    assert cli.main([*arguments, "--suite", DEMO, "--seed", "1"]) == 0
+
+    assert [row["seed"] for row in group_for(out)["judges"]["rubrics"]] == [0, 1]
+
+
+def test_flat_judge_scale_is_malformed(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good")
+
+    def flatten(row: dict[str, Any]) -> None:
+        item = row["items"][0]
+        item["scale"]["min"] = item["scale"]["max"] = item["score"]
+
+    edit_judgment(runs[0], flatten)
+
+    assert group_for(tmp_path / "runs")["judges"]["rubrics"][0]["malformed"] == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    ['{"start_ms": 1' + "0" * 400 + ', "text": "x"}\n', "[" * 200000 + "\n"],
+)
+def test_bad_transcript_does_not_stop_the_report(tmp_path: Path, body: str) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good")
+    (runs[0] / "transcript.jsonl").write_text(body, encoding="utf-8")
+
+    assert group_for(tmp_path / "runs")["judges"]["unreadable_runs"] == [runs[0].name]
+
+
+def test_special_judge_file_does_not_hang_the_report(tmp_path: Path) -> None:
+    runs = make_runs(tmp_path / "runs", "mock:good")
+    (runs[0] / "judges.jsonl").unlink()
+    os.mkfifo(runs[0] / "judges.jsonl")
+
+    assert group_for(tmp_path / "runs")["judges"]["unreadable_runs"] == [runs[0].name]
+
+
+def test_out_reports_a_symlink_loop(tmp_path: Path) -> None:
+    make_runs(tmp_path / "runs", judged=False)
+    link = tmp_path / "loop.txt"
+    link.symlink_to(link)
+
+    assert cli.main(["report", str(tmp_path / "runs"), "--out", str(link)]) == 2
+
+
+def test_new_out_file_is_readable(tmp_path: Path) -> None:
+    make_runs(tmp_path / "runs", judged=False)
+    target = tmp_path / "new.txt"
+
+    assert cli.main(["report", str(tmp_path / "runs"), "--out", str(target)]) == 0
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644

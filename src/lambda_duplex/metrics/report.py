@@ -63,6 +63,7 @@ def _composite(status: str, reason: str, weights: Mapping[str, float]) -> dict[s
         "reason": reason,
         "interval": None,
         "missing": 0,
+        "method": "weighted_sum_of_parts",
         "weights": dict(sorted(weights.items())),
         "parts": [],
     }
@@ -283,7 +284,7 @@ def _group_report(
     key: tuple[str, str, str], runs: list[StoredRun], declared: Suite | None
 ) -> dict[str, Any]:
     suite, model, condition = key
-    valid = [run for run in runs if run.result.status not in INVALID_STATUSES]
+    valid = [run for run in runs if str(run.result.status) not in INVALID_STATUSES]
     cells: dict[str, list[bool]] = defaultdict(list)
     for run in valid:
         cells[run.scenario.id].append(run.decision.passed)
@@ -329,9 +330,9 @@ def build_report(runs: Iterable[StoredRun], suite: Suite | None = None) -> dict[
     for run in runs:
         manifest = run.manifest
         key = (
-            manifest["suite"]["name"],
-            manifest["model"]["reference"],
-            manifest["run"]["condition"],
+            str(manifest["suite"]["name"]),
+            str(manifest["model"]["reference"]),
+            str(manifest["run"]["condition"]),
         )
         groups[key].append(run)
     return {"groups": [_group_report(key, groups[key], suite) for key in sorted(groups)]}
@@ -398,7 +399,7 @@ def format_report(report: dict[str, Any]) -> str:
         composite = group["composite"]
         if composite["status"] == "shown":
             lines.append(
-                f"composite: {format_interval(composite['interval'])}, "
+                f"composite (weighted sum of parts): {format_interval(composite['interval'])}, "
                 f"{composite['missing']} runs not computed"
             )
             for part in composite["parts"]:

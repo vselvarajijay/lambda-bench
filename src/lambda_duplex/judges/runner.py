@@ -301,6 +301,8 @@ def _write_lines(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 def _read_lines(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
+    if not path.is_file():
+        raise JudgeError(f"cannot read {path}: not a regular file")
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         rows = [json.loads(line) for line in lines if line]
@@ -356,7 +358,7 @@ def _has_current_score(run_path: Path, record: Mapping[str, Any]) -> bool:
     return any(
         _identity(row) == _identity(record)
         and row["status"] == "scored"
-        and row["transcript"].get("sha256") == record["transcript"]["sha256"]
+        and row["transcript"].get("input_sha256") == record["transcript"]["input_sha256"]
         for row in load_judgments(run_path)
     )
 

@@ -598,7 +598,7 @@ def _report(args: argparse.Namespace) -> int:
         return 0
     try:
         _write_text(args.out, text + "\n")
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         print(f"cannot write {args.out}: {error}", file=sys.stderr)
         return 2
     return 0
