@@ -14,6 +14,7 @@ from pathlib import Path
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
+from lambda_duplex.counterpart.errors import NoiseAssetError
 from lambda_duplex.metrics.conversation import (
     ConversationTimeline,
     conversation_metrics,
@@ -23,7 +24,7 @@ from lambda_duplex.metrics.conversation import (
     timing_metrics,
 )
 from lambda_duplex.metrics.report import build_report, format_report
-from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig, RunOutcome
+from lambda_duplex.orchestrator import MediaClock, Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
 from lambda_duplex.suites.loader import (
     SuiteError,
@@ -165,16 +166,22 @@ def _run_suite(args: argparse.Namespace) -> int:
             except ValueError as error:
                 print(error, file=sys.stderr)
                 return 2
-            run = asyncio.run(
-                run_scenario(
-                    loaded.suite,
-                    scenario,
-                    adapter,
-                    seed=seed,
-                    max_ticks=suite_ticks,
-                    speech=speech,
+            try:
+                run = asyncio.run(
+                    run_scenario(
+                        loaded.suite,
+                        scenario,
+                        adapter,
+                        seed=seed,
+                        max_ticks=suite_ticks,
+                        condition=args.condition,
+                        speech=speech,
+                        noise_dir=args.noise_dir,
+                    )
                 )
-            )
+            except (NoiseAssetError, ValueError) as error:
+                print(error, file=sys.stderr)
+                return 2
             if args.out is not None:
                 spec = RunSpec(
                     _stored_suite_reference(args.suite, loaded.suite.manifest.name),
@@ -183,7 +190,7 @@ def _run_suite(args: argparse.Namespace) -> int:
                     seed,
                     suite_ticks,
                     run.trajectory.tick_ms,
-                    loaded.suite.manifest.default_condition,
+                    run.condition,
                     audio_backend=args.audio_backend if args.mode == "audio" else None,
                 )
                 try:
@@ -196,6 +203,8 @@ def _run_suite(args: argparse.Namespace) -> int:
                         run.result,
                         run.decision,
                         tracks=run.tracks,
+                        effects=run.effects,
+                        condition=run.condition_details,
                     )
                 except TrajectoryError as error:
                     print(error, file=sys.stderr)
@@ -266,6 +275,46 @@ def _metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def _effects(args: argparse.Namespace) -> int:
+    import numpy as np
+    import soundfile as sf  # type: ignore[import-untyped]
+
+    from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, silence
+    from lambda_duplex.audio.tracks import resample_pcm, to_array
+    from lambda_duplex.conditions import get_condition
+    from lambda_duplex.counterpart.effects import EffectChain, active_rms
+
+    try:
+        condition = get_condition(args.condition)
+        audio, rate = sf.read(args.input, dtype="int16", always_2d=False)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 2
+    mono = np.asarray(audio.mean(axis=1) if audio.ndim > 1 else audio, dtype="<i2")
+    pcm = resample_pcm(mono.tobytes(), int(rate), INTERNAL_SAMPLE_RATE)
+    samples = MediaClock().samples_per_tick(INTERNAL_SAMPLE_RATE)
+    pcm += silence(-(len(pcm) // 2) % samples)
+    chain = EffectChain(condition.effects, args.seed, samples, speech_rms=active_rms(pcm))
+    size = samples * 2
+    output = b"".join(chain.process(pcm[i : i + size]) for i in range(0, len(pcm), size))
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(args.out, to_array(output), INTERNAL_SAMPLE_RATE, subtype="PCM_16")
+    print(json.dumps(chain.metadata(), indent=2, sort_keys=True))
+    return 0
+
+
+def _assets(args: argparse.Namespace) -> int:
+    from lambda_duplex.counterpart.effects.noise_assets import download_musan_noise
+
+    try:
+        manifest = download_musan_noise(args.out)
+    except (NoiseAssetError, OSError) as error:
+        print(error, file=sys.stderr)
+        return 2
+    print(f"installed {len(manifest['files'])} noise recordings in {args.out}")
+    return 0
+
+
 def _timeline(args: argparse.Namespace) -> int:
     paths = find_run_dirs(args.path)
     if not paths:
@@ -316,7 +365,7 @@ def _replay(args: argparse.Namespace) -> int:
     healthy = True
     for path in paths:
         try:
-            report = asyncio.run(verify_run(path, suite))
+            report = asyncio.run(verify_run(path, suite, args.noise_dir))
         except (SuiteError, TrajectoryError) as error:
             print(f"{path}: {error}", file=sys.stderr)
             return 2
@@ -382,12 +431,25 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", required=True)
     run.add_argument("--mode", choices=("text", "audio"), default="text")
     run.add_argument("--audio-backend", choices=("synthetic",))
+    run.add_argument("--condition", help="audio condition; defaults to the suite setting")
+    run.add_argument("--noise-dir", type=Path, help="installed noise recordings")
     run.add_argument("--ticks", type=int)
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--split", choices=("dev", "test"), default="dev")
     run.add_argument("--scenario")
     run.add_argument("--out", type=Path, help="directory for stored run data")
     run.add_argument("--k", type=int, default=1, help="trials per scenario")
+    effects = commands.add_parser("effects", help="preview audio conditions")
+    effect_commands = effects.add_subparsers(dest="effects_command", required=True)
+    preview = effect_commands.add_parser("preview", help="apply a condition to an audio file")
+    preview.add_argument("input", type=Path)
+    preview.add_argument("--condition", required=True)
+    preview.add_argument("--seed", type=int, default=0)
+    preview.add_argument("--out", type=Path, required=True)
+    assets = commands.add_parser("assets", help="install optional data assets")
+    asset_commands = assets.add_subparsers(dest="assets_command", required=True)
+    noise = asset_commands.add_parser("noise", help="download MUSAN noise recordings")
+    noise.add_argument("--out", type=Path, default=Path("data/noise"))
     metrics = commands.add_parser("metrics", help="compute conversation metrics")
     metrics.add_argument("path", type=Path, help="timeline JSON file or timed run directory")
     metrics.add_argument("--group", choices=("all", "timing", "overlap"), default="all")
@@ -404,6 +466,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("path", type=Path)
     replay.add_argument("--verify", action="store_true", help="rescore and replay the run")
     replay.add_argument("--suite", help="suite to use instead of the stored reference")
+    replay.add_argument("--noise-dir", type=Path, help="installed noise recordings")
     suites = commands.add_parser("suites", help="list or validate suites")
     suite_commands = suites.add_subparsers(dest="suites_command", required=True)
     suite_commands.add_parser("list", help="list available suites")
@@ -421,6 +484,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "effects":
+        return _effects(args)
+    if args.command == "assets":
+        return _assets(args)
     if args.command == "metrics":
         return _metrics(args)
     if args.command == "timeline":

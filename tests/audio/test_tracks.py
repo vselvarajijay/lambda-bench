@@ -295,6 +295,7 @@ def test_truncated_run_replays(tmp_path: Path) -> None:
         run.result,
         run.decision,
         tracks=run.tracks,
+        condition=run.condition_details,
     )
 
     report = asyncio.run(verify_run(path, loaded.suite))

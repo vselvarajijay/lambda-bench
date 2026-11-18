@@ -143,6 +143,8 @@ def write_run(
     decision: PassDecision,
     llm_entries: Iterable[Mapping[str, Any]] = (),
     tracks: AudioTracks | None = None,
+    effects: Mapping[str, Any] | None = None,
+    condition: Mapping[str, Any] | None = None,
 ) -> Path:
     """Write a complete run directory, or leave no destination behind."""
     if path.exists():
@@ -173,6 +175,10 @@ def write_run(
         },
     }
     temporary = Path(tempfile.mkdtemp(prefix=f".{path.name}.", dir=path.parent))
+    if effects is not None:
+        manifest["effects"] = dict(effects)
+    if condition is not None:
+        manifest["condition"] = dict(condition)
     try:
         if tracks is not None:
             manifest["audio"] = {"backend": spec.audio_backend, **tracks.write(temporary / "audio")}
