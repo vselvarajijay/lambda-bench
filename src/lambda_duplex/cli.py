@@ -6,8 +6,10 @@ import argparse
 import asyncio
 import importlib.util
 import json
+import os
 import platform
 import sys
+import tempfile
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,10 +40,11 @@ from lambda_duplex.metrics.conversation import (
     timeline_from_dict,
     timing_metrics,
 )
-from lambda_duplex.metrics.report import build_report, format_report
+from lambda_duplex.metrics.report import SuiteLookup, build_report, format_report
+from lambda_duplex.metrics.report_html import format_html
 from lambda_duplex.orchestrator import MediaClock, Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
-from lambda_duplex.suites.base import ScriptSimulator
+from lambda_duplex.suites.base import ScriptSimulator, Suite
 from lambda_duplex.suites.loader import (
     SuiteError,
     list_suites,
@@ -541,17 +544,63 @@ def _timeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report_suites(override: str | None) -> SuiteLookup:
+    """Find suites for composites. A stored suite that cannot load has no composite."""
+    forced = None if override is None else load_suite(override).suite
+    found: dict[str, Suite | None] = {}
+
+    def lookup(reference: str) -> Suite | None:
+        if forced is not None:
+            return forced
+        if reference not in found:
+            try:
+                found[reference] = load_suite(reference).suite
+            except Exception:
+                found[reference] = None
+        return found[reference]
+
+    return lookup
+
+
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as output:
+            output.write(text)
+        os.chmod(name, 0o644)
+        os.replace(name, path)
+    except Exception:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
 def _report(args: argparse.Namespace) -> int:
     paths = find_run_dirs(args.path)
     if not paths:
         print(f"no runs found in {args.path}", file=sys.stderr)
         return 2
     try:
-        report = build_report(load_run(path) for path in paths)
-    except TrajectoryError as error:
+        suites = _report_suites(args.suite)
+        report = build_report((load_run(path) for path in paths), suites)
+    except (SuiteError, TrajectoryError) as error:
         print(error, file=sys.stderr)
         return 2
-    print(json.dumps(report, indent=2, sort_keys=True) if args.json else format_report(report))
+    output_format = "json" if args.json else args.format
+    if output_format == "json":
+        text = json.dumps(report, indent=2, sort_keys=True)
+    elif output_format == "html":
+        text = format_html(report)
+    else:
+        text = format_report(report)
+    if args.out is None:
+        print(text)
+        return 0
+    try:
+        _write_text(args.out, text + "\n")
+    except OSError as error:
+        print(f"cannot write {args.out}: {error}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -765,7 +814,13 @@ def build_parser() -> argparse.ArgumentParser:
     new_suite.add_argument("--out", type=Path, help="destination directory")
     report = commands.add_parser("report", help="summarize stored runs")
     report.add_argument("path", type=Path)
-    report.add_argument("--json", action="store_true", help="print machine-readable output")
+    report_format = report.add_mutually_exclusive_group()
+    report_format.add_argument("--json", action="store_true", help="print machine-readable output")
+    report_format.add_argument(
+        "--format", choices=("text", "json", "html"), default="text", help="output format"
+    )
+    report.add_argument("--out", type=Path, help="write the report to this file")
+    report.add_argument("--suite", help="suite to use instead of the stored reference")
     replay = commands.add_parser("replay", help="verify stored runs")
     replay.add_argument("path", type=Path)
     replay.add_argument("--verify", action="store_true", help="rescore and replay the run")
