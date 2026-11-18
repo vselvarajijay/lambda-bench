@@ -21,6 +21,8 @@ Every code change follows this workflow. A task is not done until its PR is open
 
 ## 4. Submit a PR
 
+- Score-affecting changes need a review from an agent or person who did not write them. After that review passes, record it in the PR with an `Independent review:` line and the `independent-review-passed` label.
+
 - Commit the work, push the branch, and open a PR against `main` with `gh pr create`.
 - In the PR description, state what changed, why, and how it was verified, including the commands you ran and their results.
 - List anything you could not verify or that still fails.

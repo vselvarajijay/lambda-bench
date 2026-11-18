@@ -49,7 +49,7 @@ target-version = "py312"
 select = ["B", "E", "F", "I", "RUF", "UP"]
 
 [tool.mypy]
-files = ["src", "tests", "suites"]
+files = ["src", "tests", "suites", "scripts"]
 mypy_path = "src:."
 explicit_package_bases = true
 python_version = "3.12"

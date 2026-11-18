@@ -32,6 +32,7 @@ Skip the PR and record the reason if any of these is true:
 - It comes from a fork (`isCrossRepository` is true). Do not check out or run its code.
 - `reviewDecision` is `CHANGES_REQUESTED` or `REVIEW_REQUIRED`.
 - Any check has failed, or `gh pr checks` reports no checks at all.
+- The `review-required` check is failing or pending. Never add the `independent-review-passed` label yourself.
 
 Otherwise:
 
