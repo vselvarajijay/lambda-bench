@@ -29,7 +29,7 @@ def pass_hat_k(trials: int, successes: int, k: int) -> float:
     return math.comb(successes, k) / math.comb(trials, k)
 
 
-def _quantile(sorted_values: Sequence[float], probability: float) -> float:
+def quantile(sorted_values: Sequence[float], probability: float) -> float:
     position = (len(sorted_values) - 1) * probability
     lower = math.floor(position)
     upper = math.ceil(position)
@@ -60,6 +60,4 @@ def clustered_bootstrap(
     generator = random.Random(seed)
     samples = sorted(mean([generator.choice(groups) for _ in groups]) for _ in range(iterations))
     tail = (1 - confidence) / 2
-    return Interval(
-        mean(groups), _quantile(samples, tail), _quantile(samples, 1 - tail), len(groups)
-    )
+    return Interval(mean(groups), quantile(samples, tail), quantile(samples, 1 - tail), len(groups))

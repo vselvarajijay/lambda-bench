@@ -14,6 +14,12 @@ from pathlib import Path
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
+from lambda_duplex.metrics.conversation import (
+    ConversationTimeline,
+    metrics_to_dict,
+    timeline_from_dict,
+    timing_metrics,
+)
 from lambda_duplex.metrics.report import build_report, format_report
 from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
@@ -216,6 +222,43 @@ def _new_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_metric_timeline(path: Path) -> ConversationTimeline:
+    if path.is_file():
+        return timeline_from_dict(json.loads(path.read_text(encoding="utf-8")))
+    run = load_run(path)
+    stored = json.loads((path / "timeline.json").read_text(encoding="utf-8"))
+    suite = load_suite(run.manifest["suite"]["reference"]).suite
+    goal_event = suite.manifest.goal_event
+    goals = run.trajectory.suite_events(goal_event) if goal_event else ()
+    return timeline_from_dict(
+        {
+            "duration_ms": stored["duration_ms"],
+            "counterpart": stored["counterpart"]["segments"],
+            "model": stored["model"]["segments"],
+            "goal_ms": goals[0].time_ms if goals else None,
+            "talk_target": list(suite.manifest.talk_ratio_target),
+        }
+    )
+
+
+def _metrics(args: argparse.Namespace) -> int:
+    try:
+        timeline = _load_metric_timeline(args.path)
+        metrics = timing_metrics(timeline)
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        SuiteError,
+        TrajectoryError,
+    ) as error:
+        print(f"cannot compute metrics: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(metrics_to_dict(metrics), indent=2, sort_keys=True))
+    return 0
+
+
 def _timeline(args: argparse.Namespace) -> int:
     paths = find_run_dirs(args.path)
     if not paths:
@@ -338,6 +381,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--scenario")
     run.add_argument("--out", type=Path, help="directory for stored run data")
     run.add_argument("--k", type=int, default=1, help="trials per scenario")
+    metrics = commands.add_parser("metrics", help="compute conversation metrics")
+    metrics.add_argument("path", type=Path, help="timeline JSON file or timed run directory")
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
@@ -368,6 +413,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "metrics":
+        return _metrics(args)
     if args.command == "timeline":
         return _timeline(args)
     if args.command == "new-suite":
