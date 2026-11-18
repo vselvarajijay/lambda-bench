@@ -979,7 +979,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 4.1: Adapter conformance kit
 
-- [ ] `adapter-check`: frame size, start and stop, silence, interruption, timeout, capability truthfulness.
+- [x] `adapter-check`: frame size, start and stop, silence, interruption, timeout, capability truthfulness.
 - **Run:** `uv run lambda-duplex adapter-check mock`
 - **Test:** intentionally broken adapters fail specific checks.
 - **Done when:** the kit is documented and runs in CI on `mock`.

@@ -255,6 +255,31 @@ def _run_suite(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _adapter_check(args: argparse.Namespace) -> int:
+    if args.model != "mock":
+        print(f"unknown adapter: {args.model}", file=sys.stderr)
+        return 2
+    try:
+        from lambda_duplex.adapters.conformance import check_adapter, report_rows
+        from lambda_duplex.audio.synthetic import SyntheticSpeech
+    except ImportError as error:
+        print(f"adapter checks require audio dependencies: {error}", file=sys.stderr)
+        return 2
+
+    def factory() -> MockAdapter:
+        return MockAdapter({2: "hello from the mock model"}, False, SyntheticSpeech(7))
+
+    results = asyncio.run(check_adapter(factory))
+    if args.json:
+        print(json.dumps(report_rows(results), indent=2, sort_keys=True))
+    else:
+        for result in results:
+            status = "ok" if result.passed else "FAIL"
+            suffix = f": {result.detail}" if result.detail else ""
+            print(f"{status:4} {result.name}{suffix}")
+    return 0 if all(result.passed for result in results) else 1
+
+
 def _simulate_script(args: argparse.Namespace) -> int:
     try:
         loaded = load_suite(args.suite)
@@ -573,6 +598,9 @@ def build_parser() -> argparse.ArgumentParser:
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
+    adapter_check = commands.add_parser("adapter-check", help="check a model adapter")
+    adapter_check.add_argument("model")
+    adapter_check.add_argument("--json", action="store_true")
     interviewer = commands.add_parser("interviewer", help="debug interviewer scenarios")
     interviewer_commands = interviewer.add_subparsers(dest="interviewer_command", required=True)
     simulate = interviewer_commands.add_parser("simulate", help="run a disclosure script")
@@ -617,6 +645,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _transcribe(args)
     if args.command == "timeline":
         return _timeline(args)
+    if args.command == "adapter-check":
+        return _adapter_check(args)
     if args.command == "interviewer":
         return _simulate_script(args)
     if args.command == "new-suite":
