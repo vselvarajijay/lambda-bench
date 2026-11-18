@@ -25,6 +25,7 @@ from lambda_duplex.suites.loader import (
     valid_scenarios,
 )
 from lambda_duplex.suites.runtime import mock_for, run_scenario
+from lambda_duplex.suites.scaffold import ScaffoldError, create_suite
 from lambda_duplex.trajectory.replay import verify_run
 from lambda_duplex.trajectory.seeds import stream_seed
 from lambda_duplex.trajectory.store import (
@@ -180,6 +181,18 @@ def _run_suite(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _new_suite(args: argparse.Namespace) -> int:
+    destination = args.out or Path("suites") / args.name
+    try:
+        path = create_suite(args.name, destination)
+    except ScaffoldError as error:
+        print(error, file=sys.stderr)
+        return 2
+    print(f"created {path}")
+    print(f"next: lambda-duplex suites validate {path}")
+    return 0
+
+
 def _report(args: argparse.Namespace) -> int:
     paths = find_run_dirs(args.path)
     if not paths:
@@ -274,6 +287,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--scenario")
     run.add_argument("--out", type=Path, help="directory for stored run data")
     run.add_argument("--k", type=int, default=1, help="trials per scenario")
+    new_suite = commands.add_parser("new-suite", help="create a suite from the template")
+    new_suite.add_argument("name")
+    new_suite.add_argument("--out", type=Path, help="destination directory")
     report = commands.add_parser("report", help="summarize stored runs")
     report.add_argument("path", type=Path)
     report.add_argument("--json", action="store_true", help="print machine-readable output")
@@ -298,6 +314,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "new-suite":
+        return _new_suite(args)
     if args.command == "report":
         return _report(args)
     if args.command == "replay":

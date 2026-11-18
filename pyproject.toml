@@ -32,6 +32,9 @@ path = "src/lambda_duplex/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/lambda_duplex"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"suites/_template" = "lambda_duplex/_suite_template"
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]

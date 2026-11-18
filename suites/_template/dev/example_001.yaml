@@ -1,0 +1,5 @@
+id: example_001
+version: 1
+split: dev
+brief: Find out the answer the other speaker knows.
+answer: lantern

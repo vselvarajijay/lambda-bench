@@ -776,7 +776,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.6: `new-suite` scaffold
 
-- [ ] `suites/_template` and the scaffold command.
+- [x] `suites/_template` and the scaffold command.
 - **Run:** `uv run lambda-duplex new-suite hello --out /tmp/hello && uv run lambda-duplex suites validate /tmp/hello`
 - **Test:** CI scaffolds a suite and runs it with `mock`.
 - **Done when:** a new suite runs with no manual edits.
