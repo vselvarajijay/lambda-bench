@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>λ-bench replay</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">λ-bench replay</p>
+        <h1 id="title">Conversation</h1>
+        <p id="summary" class="muted"></p>
+      </div>
+      <label>Audio
+        <select id="track"></select>
+      </label>
+    </header>
+    <audio id="audio" controls preload="metadata"></audio>
+    <section aria-labelledby="timeline-heading">
+      <h2 id="timeline-heading">Speech timeline</h2>
+      <div id="timeline" class="timeline" role="group" aria-label="Conversation timeline">
+        <div class="lane-label" style="top: 8px">Counterpart</div>
+        <div class="lane-label" style="top: 50px">Model</div>
+        <div class="lane-label" style="top: 92px">Events</div>
+        <div id="playhead" class="playhead"></div>
+      </div>
+    </section>
+    <div class="columns">
+      <section aria-labelledby="events-heading">
+        <h2 id="events-heading">Events</h2>
+        <ol id="events" class="list"></ol>
+      </section>
+      <section aria-labelledby="transcript-heading">
+        <h2 id="transcript-heading">Transcript</h2>
+        <ol id="transcript" class="list"></ol>
+      </section>
+    </div>
+  </main>
+  <script src="run-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
