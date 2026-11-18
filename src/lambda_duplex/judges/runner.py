@@ -53,6 +53,7 @@ Reply with JSON only, in this form:
 "evidence": [{{"turn": <turn number>, "quote": "<exact words from that turn>"}}]}}]}}
 Score every item once. Each score needs at least min_evidence quotes, including one from
 speaker A. Use null only when allow_na is true and the item does not apply."""
+FIXED_PROMPT = tuple(SYSTEM_PROMPT.format(instructions="\0").split("\0"))
 RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -450,7 +451,7 @@ async def _score(
         record["attempts"] = attempt + 1
         used_keys.add(request.key())
         try:
-            assert_blinded(request, transcript.terms, run)
+            assert_blinded(request, transcript.terms, run, FIXED_PROMPT)
         except BlindingError as error:
             errors.append(f"blinding: {error}")
             return

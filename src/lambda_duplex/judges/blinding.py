@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -69,11 +69,18 @@ def _looks_like_identifier(value: str) -> bool:
     return len(value) <= MAX_SETTING_TERM and re.search(r"[\d_./:-]", value) is not None
 
 
+def _reference_terms(reference: str) -> set[str]:
+    """Return the reference, its model name, and any identifier-like parts."""
+    model_name = re.split(r"[:@]", reference.rstrip("/").rsplit("/", 1)[-1])[0]
+    parts = {*re.split(r"[:/@]", reference), *re.split(r"[:@]", reference)}
+    return {reference, model_name, *filter(_looks_like_identifier, parts)}
+
+
 def identity_terms(run: StoredRun, extra: Iterable[str] = ()) -> tuple[str, ...]:
     """Return strings that would identify the evaluated model."""
     model: Mapping[str, Any] = run.manifest["model"]
     reference = str(model["reference"])
-    terms = {str(model["name"]), reference, *re.split(r"[:/@]", reference)}
+    terms = {str(model["name"]), *_reference_terms(reference)}
     candidates = [model["version"], *dict(model["settings"]).values()]
     terms.update(
         value for value in candidates if isinstance(value, str) and _looks_like_identifier(value)
@@ -186,20 +193,42 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
     return BlindedTranscript(tuple(turns), source, total, terms, delivery_known)
 
 
-def assert_blinded(request: LLMRequest, terms: Sequence[str], run: StoredRun) -> None:
-    """Refuse a request whose content could identify the evaluated model."""
+def _strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+
+
+def assert_blinded(
+    request: LLMRequest, terms: Sequence[str], run: StoredRun, fixed: Sequence[str] = ()
+) -> None:
+    """Refuse a request whose run-specific or rubric text could identify the model.
+
+    ``fixed`` lists prompt text that is the same for every run. It and the JSON field
+    names cannot reveal the model, so a model called ``json`` is not a leak.
+    """
     try:
         payload = json.loads(request.messages[1]["content"])
         keys = set(payload)
         turn_keys = {key for row in payload["transcript"] for key in row}
+        spoken = [str(row.get("text", "")) for row in payload["transcript"]]
+        system = request.messages[0]["content"]
     except (IndexError, KeyError, TypeError, ValueError) as error:
         raise BlindingError(f"judge input has an unexpected shape: {error}") from error
     if keys != PAYLOAD_KEYS or turn_keys - TURN_KEYS:
         raise BlindingError("judge input carries fields outside the blinded format")
-    content = "\n".join(message["content"] for message in request.messages)
-    content += json.dumps(dict(request.params), sort_keys=True)
+    for text in fixed:
+        system = system.replace(text, "")
+    params = list(_strings(dict(request.params)))
+    content = "\n".join([system, *_strings(payload["items"]), *spoken, *params])
     pattern = _term_pattern(terms)
-    if pattern is not None and pattern.search(content) is not None:
-        raise BlindingError("judge input contains an identity term of the evaluated model")
+    found = None if pattern is None else pattern.search(content)
+    if found is not None:
+        raise BlindingError(f"judge input contains the identity term {found.group()!r}")
     if str(run.path.resolve()) in content:
         raise BlindingError("judge input contains the run path")

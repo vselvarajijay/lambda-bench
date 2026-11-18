@@ -49,10 +49,10 @@ Every score needs quotes from numbered turns, including one from the evaluated s
 
 The judge sees only the rubric and a transcript with speakers `A` and `B`. It does not receive the model identity, run path, seed, scenario data, metrics or pass result.
 
-- The model's name, reference and session ids are replaced with `[REDACTED]` wherever they are spoken. So are its version and string settings when they look like identifiers, such as `tuned-v3`. Plain words such as `main` are kept, because removing them would damage ordinary speech.
+- The model's name, full reference, the model part of that reference, and session ids are replaced with `[REDACTED]` wherever they are spoken. So are its version, string settings and other reference parts when they look like identifiers, such as `tuned-v3`. Plain words such as `main` or an organization name are kept, because removing them would damage ordinary speech.
 - Add other names with `--blind-term`, for example the vendor. Redaction cannot catch identity expressed any other way, such as a distinctive phrase.
 - Rubric items and runs are shuffled using `--seed`.
-- Each request is checked before sending. If an identity term remains, no call is made and the record is `failed`.
+- Each request's transcript and rubric text are checked before sending. If an identity term remains, no call is made and the record is `failed`.
 
 ## What the judge reads
 

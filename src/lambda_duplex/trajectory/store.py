@@ -245,6 +245,14 @@ def load_run(path: Path) -> StoredRun:
     return StoredRun(path, manifest, scenario, trajectory, result, decision, entries)
 
 
+def _holds_run(path: Path) -> bool:
+    """Treat an unreadable directory as a run, so loading it reports the problem."""
+    try:
+        return (path / "manifest.json").is_file()
+    except PermissionError:
+        return True
+
+
 def find_run_dirs(path: Path) -> list[Path]:
     """Return a run directory, or the complete runs directly inside a directory."""
     if (path / "manifest.json").is_file():
@@ -252,7 +260,5 @@ def find_run_dirs(path: Path) -> list[Path]:
     if not path.is_dir():
         return []
     return sorted(
-        child
-        for child in path.iterdir()
-        if not child.name.startswith(".") and (child / "manifest.json").is_file()
+        child for child in path.iterdir() if not child.name.startswith(".") and _holds_run(child)
     )

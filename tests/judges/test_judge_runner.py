@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -938,3 +939,106 @@ def test_cli_survives_an_unexpected_crash_in_one_run(
     assert code == 2
     assert len(load_judgments(second)) == 1
     assert first.name in capsys.readouterr().err
+
+
+def _set_reference(run: Path, reference: str) -> None:
+    path = run / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["model"]["reference"] = reference
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_plain_reference_parts_stay_in_speech(tmp_path: Path) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    run.manifest["model"]["reference"] = "acme/mock:good"
+
+    assert redact("A good answer from acme", identity_terms(run))[1] == 0
+
+
+def test_model_named_like_a_prompt_word_can_still_be_judged(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    _set_reference(run, "acme/json:v1")
+
+    assert judge(run, config()).record["status"] == "scored"
+
+
+def test_finished_text_turns_are_not_marked_cut_off(tmp_path: Path) -> None:
+    turns = blinded_transcript(load_run(demo_run(tmp_path / "runs"))).turns
+
+    assert not any(turn.cut_off for turn in turns)
+    assert all(turn.text for turn in turns)
+
+
+def _outage(request: LLMRequest, call: int) -> str:
+    raise OSError("outage")
+
+
+def test_failure_replaces_a_score_of_an_older_transcript(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    row = {"start_ms": 100, "text": "New words here.", "source": "whisper"}
+    (run / "transcript.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    outcome = judge(run, config(_outage, retries=0))
+
+    assert "kept the earlier scored judgment" not in outcome.record["errors"]
+    assert [row["status"] for row in load_judgments(run)] == ["failed"]
+
+
+def test_score_from_another_judge_model_is_not_kept_instead(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    provider = FakeProvider(_outage)
+
+    outcome = judge(run, JudgeConfig(RUBRIC, "fake", provider, "other", retries=0, backoff_s=0))
+
+    assert "kept the earlier scored judgment" not in outcome.record["errors"]
+    assert sorted(row["status"] for row in load_judgments(run)) == ["failed", "scored"]
+
+
+def test_earlier_failure_is_not_protected(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config(_outage, retries=0))
+
+    outcome = judge(run, config(_outage, retries=0))
+
+    assert "kept the earlier scored judgment" not in outcome.record["errors"]
+
+
+def test_cli_warns_when_the_stored_suite_is_missing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = demo_run(tmp_path / "runs")
+    path = run / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["suite"]["reference"] = "missing-suite"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    code = cli.main(["judge", str(run), "--rubric", "question_quality", "--provider", "fake"])
+
+    assert code == 0
+    assert "using the built-in rubric only" in capsys.readouterr().err
+
+
+def test_cli_refuses_a_missing_explicit_suite(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    arguments = ["judge", str(run), "--rubric", "question_quality", "--provider", "fake"]
+
+    assert cli.main([*arguments, "--suite", "missing-suite"]) == 2
+    assert not (run / "judges.jsonl").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_cli_reports_an_unreadable_run_and_judges_the_rest(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    first = demo_run(root)
+    second = first.with_name(first.name + "-copy")
+    shutil.copytree(first, second)
+    first.chmod(0)
+    try:
+        code = cli.main(["judge", str(root), "--rubric", "question_quality", "--provider", "fake"])
+    finally:
+        first.chmod(0o755)
+
+    assert code == 2
+    assert len(load_judgments(second)) == 1

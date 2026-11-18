@@ -589,9 +589,10 @@ def _judge_rubric(
         if reference:
             try:
                 root = load_suite(reference).root
-            except SuiteError:
+            except SuiteError as error:
                 if args.suite:
                     raise
+                print(f"warning: {error}; using the built-in rubric only", file=sys.stderr)
         rubrics[reference] = resolve_rubric(args.rubric, root)
     return rubrics[reference]
 
