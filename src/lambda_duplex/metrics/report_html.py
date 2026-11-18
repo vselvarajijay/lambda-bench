@@ -32,7 +32,7 @@ JUDGE_NOTE = (
 SECTION_TITLES = {
     "deterministic": "Deterministic checks",
     "classified": "Classified checks",
-    "judge": "Judge checks stored in results",
+    "judge": "Judge checks stored in results (non-deterministic)",
 }
 
 
@@ -126,13 +126,15 @@ def _composite(composite: Mapping[str, Any]) -> str:
 
 
 def _rubric(rubric: Mapping[str, Any]) -> str:
-    title = f"{rubric['rubric']['id']} version {rubric['rubric']['version']}"
+    identity = rubric["rubric"]
+    title = f"{identity['id']} version {identity['version']} ({identity['sha256'][:12]})"
     judge = f"{rubric['judge']['provider']}:{rubric['judge']['model']}"
     counts = (
         ("Scored", rubric["scored"]),
         ("Failed", rubric["failed"]),
         ("Unscorable", rubric["unscorable"]),
         ("Malformed", rubric["malformed"]),
+        ("Stale (transcript changed)", rubric["stale"]),
         ("Not judged", rubric["not_judged"]),
     )
     items = [

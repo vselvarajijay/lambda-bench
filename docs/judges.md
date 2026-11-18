@@ -64,6 +64,6 @@ A repeated request uses the stored reply, so a second pass makes no new provider
 
 ## Reports
 
-`lambda-duplex report <runs> --format html` adds judge scores in their own section, labeled non-deterministic and uncalibrated. Pass rates and pass^k use only stored pass decisions, so judge files cannot change them. Scored, failed, unscorable, malformed and missing judgments are counted separately, and a run with an unreadable `judges.jsonl` is listed by name.
+`lambda-duplex report <runs> --format html` adds judge scores in their own section, labeled non-deterministic and uncalibrated. Pass rates and pass^k use only stored pass decisions, so judge files cannot change them. Scored, failed, unscorable, malformed, stale and missing judgments are counted separately, and a run with an unreadable `judges.jsonl` is listed by name. A judgment is stale when the transcript it read has since changed. Stale scores are left out until the run is judged again.
 
-A suite composite appears only when the suite is available at the stored version and declares weights for parts that have values. Each part is shown beside it. Otherwise the report says why no composite is shown.
+`report` does not load suite code on its own, so a results folder cannot choose code to run. Pass `--suite` with a suite you trust to show its composite. The suite's name and version must match the runs. The composite is the sum of each declared weight times the stored part value, computed per run and shown beside every part. A run missing a part is counted as not computed. Otherwise the report says why no composite is shown.

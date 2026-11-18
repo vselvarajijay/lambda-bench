@@ -50,6 +50,7 @@ class BlindedTranscript:
     redactions: int
     terms: tuple[str, ...]
     delivery_known: bool = True
+    input_sha256: str = ""
 
     @property
     def sha256(self) -> str:
@@ -153,13 +154,8 @@ def _model_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str, bool]:
     return [(e.time_ms, e.data["text"]) for e in spoke], "adapter_text", known
 
 
-def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> BlindedTranscript:
-    """Return the conversation with neutral speakers and identity terms removed.
-
-    Counterpart words are shown only for turns that finished playing. An interrupted
-    turn, or one still playing when the run ended, may hold words nobody heard, and the
-    stored events do not say which words were played.
-    """
+def _conversation_rows(run: StoredRun) -> tuple[list[tuple[float, int, str, str, bool]], str, bool]:
+    """Return unredacted turns in order, the model text source and delivery status."""
     events = run.trajectory.events
     finished_starts = {
         event.data["start_tick"]
@@ -182,6 +178,27 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
     model_rows, source, delivery_known = _model_rows(run)
     rows.extend((time_ms, 1, EVALUATED, text, False) for time_ms, text in model_rows)
     rows.sort(key=lambda row: row[:2])
+    return rows, source, delivery_known
+
+
+def _fingerprint(rows: Sequence[tuple[float, int, str, str, bool]]) -> str:
+    body = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def transcript_fingerprint(run: StoredRun) -> str:
+    """Identify the conversation a judge would read, before any redaction."""
+    return _fingerprint(_conversation_rows(run)[0])
+
+
+def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> BlindedTranscript:
+    """Return the conversation with neutral speakers and identity terms removed.
+
+    Counterpart words are shown only for turns that finished playing. An interrupted
+    turn, or one still playing when the run ended, may hold words nobody heard, and the
+    stored events do not say which words were played.
+    """
+    rows, source, delivery_known = _conversation_rows(run)
     terms = identity_terms(run, extra_terms)
     turns: list[Turn] = []
     total = 0
@@ -190,7 +207,8 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
         total += count
         if text or cut_off:
             turns.append(Turn(len(turns), speaker, text, cut_off))
-    return BlindedTranscript(tuple(turns), source, total, terms, delivery_known)
+    fingerprint = _fingerprint(rows)
+    return BlindedTranscript(tuple(turns), source, total, terms, delivery_known, fingerprint)
 
 
 def _strings(value: Any) -> Iterator[str]:

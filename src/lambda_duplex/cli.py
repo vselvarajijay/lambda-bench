@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import importlib.util
 import json
 import os
 import platform
+import stat
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -40,7 +42,7 @@ from lambda_duplex.metrics.conversation import (
     timeline_from_dict,
     timing_metrics,
 )
-from lambda_duplex.metrics.report import SuiteLookup, build_report, format_report
+from lambda_duplex.metrics.report import build_report, format_report
 from lambda_duplex.metrics.report_html import format_html
 from lambda_duplex.orchestrator import MediaClock, Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
@@ -544,32 +546,29 @@ def _timeline(args: argparse.Namespace) -> int:
     return 0
 
 
-def _report_suites(override: str | None) -> SuiteLookup:
-    """Find suites for composites. A stored suite that cannot load has no composite."""
-    forced = None if override is None else load_suite(override).suite
-    found: dict[str, Suite | None] = {}
-
-    def lookup(reference: str) -> Suite | None:
-        if forced is not None:
-            return forced
-        if reference not in found:
-            try:
-                found[reference] = load_suite(reference).suite
-            except Exception:
-                found[reference] = None
-        return found[reference]
-
-    return lookup
+def _report_suite(reference: str | None) -> Suite | None:
+    """Load only a suite the user named. Its output must not corrupt the report."""
+    if reference is None:
+        return None
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            return load_suite(reference).suite
+    except SuiteError:
+        raise
+    except (Exception, SystemExit) as error:
+        raise SuiteError(f"cannot load suite {reference}: {error!r}") from error
 
 
 def _write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
+    handle, name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as output:
             output.write(text)
-        os.chmod(name, 0o644)
-        os.replace(name, path)
+        os.chmod(name, mode)
+        os.replace(name, target)
     except Exception:
         Path(name).unlink(missing_ok=True)
         raise
@@ -581,8 +580,8 @@ def _report(args: argparse.Namespace) -> int:
         print(f"no runs found in {args.path}", file=sys.stderr)
         return 2
     try:
-        suites = _report_suites(args.suite)
-        report = build_report((load_run(path) for path in paths), suites)
+        suite = _report_suite(args.suite)
+        report = build_report((load_run(path) for path in paths), suite)
     except (SuiteError, TrajectoryError) as error:
         print(error, file=sys.stderr)
         return 2
@@ -593,6 +592,7 @@ def _report(args: argparse.Namespace) -> int:
         text = format_html(report)
     else:
         text = format_report(report)
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
     if args.out is None:
         print(text)
         return 0
@@ -820,7 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=("text", "json", "html"), default="text", help="output format"
     )
     report.add_argument("--out", type=Path, help="write the report to this file")
-    report.add_argument("--suite", help="suite to use instead of the stored reference")
+    report.add_argument("--suite", help="trusted suite that supplies composite weights")
     replay = commands.add_parser("replay", help="verify stored runs")
     replay.add_argument("path", type=Path)
     replay.add_argument("--verify", action="store_true", help="rescore and replay the run")

@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import math
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict
 from typing import Any
 
+from lambda_duplex.judges.blinding import transcript_fingerprint
 from lambda_duplex.judges.runner import JudgeError, load_judgments
 from lambda_duplex.metrics.reliability import clustered_bootstrap, pass_hat_k
 from lambda_duplex.suites.base import Suite
-from lambda_duplex.trajectory.store import StoredRun
+from lambda_duplex.trajectory.store import StoredRun, TrajectoryError
 
 INVALID_STATUSES = frozenset({"counterpart_error"})
 CHECK_KINDS = ("deterministic", "classified", "judge")
-SuiteLookup = Callable[[str], Suite | None]
+MAX_JUDGE_SCORE = 10**9
 
 
 def _interval(clusters: dict[str, list[float]]) -> dict[str, Any]:
@@ -48,8 +49,8 @@ def _check_summaries(runs: list[StoredRun]) -> list[dict[str, Any]]:
 
 def _validity(runs: Sequence[StoredRun], valid: Sequence[StoredRun]) -> dict[str, Any]:
     return {
-        "statuses": dict(sorted(Counter(run.result.status for run in runs).items())),
-        "ended_by": dict(sorted(Counter(run.result.ended_by for run in runs).items())),
+        "statuses": dict(sorted(Counter(str(run.result.status) for run in runs).items())),
+        "ended_by": dict(sorted(Counter(str(run.result.ended_by) for run in runs).items())),
         "checks_not_computed": sum(
             check.value is None for run in valid for check in run.result.checks
         ),
@@ -89,57 +90,72 @@ def _composite_parts(
     return parts, absent
 
 
+def _weighted_total(weights: Mapping[str, float], run: StoredRun) -> float | None:
+    """Return the sum of weight times part value, or None if a part is unusable."""
+    total = 0.0
+    for check_id, weight in weights.items():
+        values = [
+            check.value
+            for check in run.result.checks
+            if check.id == check_id and check.value is not None
+        ]
+        if len(values) != 1:
+            return None
+        try:
+            total += weight * float(values[0])
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return total if math.isfinite(total) else None
+
+
 def _composite_values(
-    suite: Suite, runs: Sequence[StoredRun]
+    weights: Mapping[str, float], runs: Sequence[StoredRun]
 ) -> tuple[dict[str, list[float]], int]:
     clusters: dict[str, list[float]] = defaultdict(list)
     missing = 0
     for run in runs:
-        value = suite.composite(run.result)
-        if value is None or not math.isfinite(value):
+        value = _weighted_total(weights, run)
+        if value is None:
             missing += 1
         else:
-            clusters[run.scenario.id].append(float(value))
+            clusters[run.scenario.id].append(value)
     return dict(clusters), missing
 
 
+def _usable_weight(weight: Any) -> bool:
+    return type(weight) in (int, float) and math.isfinite(weight)
+
+
 def _composite_report(
+    suite_name: str,
     runs: Sequence[StoredRun],
     valid: Sequence[StoredRun],
     checks: Sequence[Mapping[str, Any]],
-    suites: SuiteLookup | None,
+    suite: Suite | None,
 ) -> dict[str, Any]:
-    """Report a composite only when every one of its parts can sit beside it."""
-    stored = {
-        (run.manifest["suite"]["reference"], run.manifest["suite"]["version"]) for run in runs
-    }
-    if len(stored) != 1:
+    """Compute a composite from its stored parts, so it always matches them."""
+    versions = {str(run.manifest["suite"]["version"]) for run in runs}
+    if len(versions) != 1:
         return _composite("unavailable", "runs come from different suite versions", {})
-    reference, version = next(iter(stored))
-    suite = None if suites is None else suites(reference)
     if suite is None:
-        return _composite("unavailable", "the suite could not be loaded", {})
-    if suite.manifest.version != version:
-        return _composite("unavailable", "the loaded suite version differs from the runs", {})
+        return _composite("unavailable", "pass --suite to read its composite weights", {})
+    if suite.manifest.name != suite_name:
+        return _composite("unavailable", "the given suite is not the suite of these runs", {})
+    if str(suite.manifest.version) not in versions:
+        return _composite("unavailable", "the given suite version differs from the runs", {})
     weights = dict(suite.manifest.composite_weights)
-    try:
-        clusters, missing = _composite_values(suite, valid)
-    except Exception as error:
-        reason = f"the suite composite failed: {type(error).__name__}"
-        return _composite("withheld", reason, weights)
-    if not weights and not clusters:
-        return _composite("none", "the suite defines no composite", {})
     if not weights:
-        return _composite("withheld", "the suite does not declare the composite's parts", {})
-    if not all(math.isfinite(weight) for weight in weights.values()):
-        return _composite("withheld", "a composite weight is not finite", weights)
+        return _composite("none", "the suite declares no composite weights", {})
+    if not all(_usable_weight(weight) for weight in weights.values()):
+        return _composite("withheld", "a composite weight is not a finite number", {})
     parts, absent = _composite_parts(weights, checks)
     if absent:
         report = _composite("withheld", f"parts have no values: {', '.join(absent)}", weights)
         report["parts"] = parts
         return report
+    clusters, missing = _composite_values(weights, valid)
     if not clusters:
-        report = _composite("withheld", "the suite returned no composite values", weights)
+        report = _composite("withheld", "no run has a value for every part", weights)
         report["parts"] = parts
         return report
     report = _composite("shown", "", weights)
@@ -160,12 +176,14 @@ def _scored_items(row: Mapping[str, Any]) -> list[tuple[str, int, int, int | Non
             numbers = [low, high] if score is None else [low, high, score]
             if not isinstance(item["id"], str) or any(type(n) is not int for n in numbers):
                 return None
+            if any(abs(number) > MAX_JUDGE_SCORE for number in numbers):
+                return None
             if low >= high or (score is not None and not low <= score <= high):
                 return None
             parsed.append((item["id"], low, high, score))
     except (KeyError, TypeError):
         return None
-    return parsed
+    return parsed if len({row[0] for row in parsed}) == len(parsed) else None
 
 
 def _judge_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, str, int]:
@@ -182,7 +200,7 @@ def _judge_key(row: Mapping[str, Any]) -> tuple[str, str, str, str, str, int]:
 
 def _judge_summary(
     key: tuple[str, str, str, str, str, int],
-    rows: Sequence[tuple[StoredRun, Mapping[str, Any]]],
+    rows: Sequence[tuple[StoredRun, Mapping[str, Any], str]],
     considered: int,
 ) -> dict[str, Any]:
     counts: Counter[str] = Counter()
@@ -191,12 +209,16 @@ def _judge_summary(
     )
     not_applicable: Counter[tuple[str, int, int]] = Counter()
     seen: set[str] = set()
-    for run, row in rows:
+    for run, row, current in rows:
+        repeated = str(run.path) in seen
+        seen.add(str(run.path))
+        if row["transcript"].get("input_sha256") != current:
+            counts["stale"] += 1
+            continue
         items = _scored_items(row) if row["status"] == "scored" else []
-        if str(run.path) in seen or items is None:
+        if repeated or items is None:
             counts["malformed"] += 1
             continue
-        seen.add(str(run.path))
         counts[row["status"]] += 1
         for item_id, low, high, score in items:
             item = (item_id, low, high)
@@ -216,7 +238,8 @@ def _judge_summary(
         "failed": counts["failed"],
         "unscorable": counts["unscorable"],
         "malformed": counts["malformed"],
-        "not_judged": max(0, considered - len(seen) - counts["malformed"]),
+        "stale": counts["stale"],
+        "not_judged": max(0, considered - len(seen)),
         "items": [
             {
                 "id": item_id,
@@ -236,11 +259,19 @@ def _judge_report(valid: Sequence[StoredRun]) -> dict[str, Any]:
     for run in valid:
         try:
             rows = load_judgments(run.path)
-        except JudgeError:
+            current = transcript_fingerprint(run) if rows else ""
+        except (
+            JudgeError,
+            TrajectoryError,
+            AttributeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
             unreadable.append(run.path.name)
             continue
         for row in rows:
-            grouped[_judge_key(row)].append((run, row))
+            grouped[_judge_key(row)].append((run, row, current))
     considered = len(valid) - len(unreadable)
     return {
         "unreadable_runs": sorted(unreadable),
@@ -249,7 +280,7 @@ def _judge_report(valid: Sequence[StoredRun]) -> dict[str, Any]:
 
 
 def _group_report(
-    key: tuple[str, str, str], runs: list[StoredRun], suites: SuiteLookup | None
+    key: tuple[str, str, str], runs: list[StoredRun], declared: Suite | None
 ) -> dict[str, Any]:
     suite, model, condition = key
     valid = [run for run in runs if run.result.status not in INVALID_STATUSES]
@@ -272,7 +303,7 @@ def _group_report(
         "pass_k": {},
         "checks": checks,
         "validity": _validity(runs, valid),
-        "composite": _composite_report(runs, valid, checks, suites),
+        "composite": _composite_report(suite, runs, valid, checks, declared),
         "judges": _judge_report(valid),
     }
     if not cells:
@@ -288,10 +319,11 @@ def _group_report(
     return report
 
 
-def build_report(runs: Iterable[StoredRun], suites: SuiteLookup | None = None) -> dict[str, Any]:
+def build_report(runs: Iterable[StoredRun], suite: Suite | None = None) -> dict[str, Any]:
     """Group stored runs by suite, model, and condition.
 
-    ``suites`` finds a suite by its stored reference. Without it no composite is computed.
+    ``suite`` supplies composite weights. Reports never load suite code themselves, because
+    a run directory must not be able to choose code to execute.
     """
     groups: dict[tuple[str, str, str], list[StoredRun]] = defaultdict(list)
     for run in runs:
@@ -302,7 +334,7 @@ def build_report(runs: Iterable[StoredRun], suites: SuiteLookup | None = None) -
             manifest["run"]["condition"],
         )
         groups[key].append(run)
-    return {"groups": [_group_report(key, groups[key], suites) for key in sorted(groups)]}
+    return {"groups": [_group_report(key, groups[key], suite) for key in sorted(groups)]}
 
 
 def format_interval(interval: dict[str, Any] | None) -> str:
@@ -327,13 +359,14 @@ def _format_judges(judges: Mapping[str, Any]) -> list[str]:
             f"by {rubric['judge']['provider']}:{rubric['judge']['model']} "
             f"seed {rubric['seed']}: {rubric['scored']} scored, {rubric['failed']} failed, "
             f"{rubric['unscorable']} unscorable, {rubric['malformed']} malformed, "
-            f"{rubric['not_judged']} not judged"
+            f"{rubric['stale']} stale, {rubric['not_judged']} not judged"
         )
         for item in rubric["items"]:
             scale = f"{item['scale']['min']}-{item['scale']['max']}"
-            lines.append(f"    {item['id']} ({scale}): {format_interval(item['interval'])}")
+            suffix = f", {item['not_applicable']} n/a" if item["not_applicable"] else ""
+            lines.append(f"    {item['id']} ({scale}): {format_interval(item['interval'])}{suffix}")
     if judges["unreadable_runs"]:
-        lines.append(f"  unreadable judge files: {len(judges['unreadable_runs'])} runs")
+        lines.append(f"  unreadable judge files: {', '.join(judges['unreadable_runs'])}")
     return lines
 
 
@@ -360,13 +393,18 @@ def format_report(report: dict[str, Any]) -> str:
         validity = group["validity"]
         statuses = ", ".join(f"{name}={count}" for name, count in validity["statuses"].items())
         lines.append(f"run statuses: {statuses}")
+        endings = ", ".join(f"{name}={count}" for name, count in validity["ended_by"].items())
+        lines.append(f"run endings: {endings}")
         composite = group["composite"]
         if composite["status"] == "shown":
-            lines.append(f"composite: {format_interval(composite['interval'])}")
+            lines.append(
+                f"composite: {format_interval(composite['interval'])}, "
+                f"{composite['missing']} runs not computed"
+            )
             for part in composite["parts"]:
                 lines.append(
                     f"  part {part['id']} ({part['kind']}, weight {part['weight']:g}): "
-                    f"{format_interval(part['interval'])}"
+                    f"{format_interval(part['interval'])}, {part['missing']} not computed"
                 )
         else:
             lines.append(f"composite: {composite['status']} ({composite['reason']})")

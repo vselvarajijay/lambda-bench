@@ -127,6 +127,7 @@ JUDGMENT_SCHEMA: dict[str, Any] = {
             "required": ["seed"],
             "properties": {"seed": {"type": "integer"}},
         },
+        "transcript": {"type": "object"},
         "items": {"type": "array"},
     },
 }
@@ -298,12 +299,12 @@ def _write_lines(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 
 
 def _read_lines(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
+    if not path.exists():
         return []
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         rows = [json.loads(line) for line in lines if line]
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         raise JudgeError(f"cannot read {path}: {error}") from error
     if not all(isinstance(row, dict) for row in rows):
         raise JudgeError(f"cannot read {path}: every line must be an object")
@@ -412,6 +413,7 @@ def _new_record(
         "transcript": {
             "source": transcript.source,
             "sha256": transcript.sha256,
+            "input_sha256": transcript.input_sha256,
             "turns": [asdict(turn) for turn in transcript.turns],
         },
         "attempts": 0,
