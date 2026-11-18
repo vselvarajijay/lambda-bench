@@ -304,6 +304,25 @@ def test_invalid_scenarios_report_useful_errors(mutation: Mutation, expected: st
     assert any(expected in item for item in issues(data)), issues(data)
 
 
+def deep_without_specific_action(data: dict[str, Any]) -> None:
+    facts(data)[2]["unlock"] = {"disclosed": "f2"}
+
+
+def two_silence_conditions(data: dict[str, Any]) -> None:
+    facts(data)[2]["unlock"]["all"].extend(
+        [
+            {"silence_after_trailoff": {"fact": "f2", "min_s": 2}},
+            {"silence_after_trailoff": {"fact": "f5", "min_s": 3}},
+        ]
+    )
+
+
+def fractional_wait(data: dict[str, Any]) -> None:
+    facts(data)[2]["unlock"]["all"][2]["any"][0] = {
+        "silence_after_trailoff": {"fact": "f2", "min_s": 0.0004}
+    }
+
+
 def surface_through_moment(data: dict[str, Any]) -> None:
     facts(data)[0]["unlock"] = {"acknowledged": {"moment": "m1"}}
 
@@ -360,6 +379,9 @@ def extra_pause_marker(data: dict[str, Any]) -> None:
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [
+        (deep_without_specific_action, "specific model action"),
+        (two_silence_conditions, "one silence condition"),
+        (fractional_wait, "whole number of milliseconds"),
         (surface_through_moment, "surface facts"),
         (impossible_timing, "contradictory"),
         (impossible_branch, "impossible branch"),

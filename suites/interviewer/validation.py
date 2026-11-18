@@ -48,6 +48,13 @@ def _check_ids(path: str, values: Sequence[str], issues: list[Issue]) -> None:
         issues.append(Issue(path, f"duplicate id {value}"))
 
 
+def _whole_milliseconds(value: Any) -> bool:
+    if not is_finite_number(value) or value <= 0:
+        return False
+    milliseconds = float(value) * 1000
+    return math.isfinite(milliseconds) and abs(milliseconds - round(milliseconds)) < 1e-6
+
+
 def _words(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).casefold().replace("\u2019", "'")
     return re.findall(r"[^\W_]+(?:'[^\W_]+)?", normalized)
@@ -121,8 +128,11 @@ def _atom_issues(
     node = atom_dependency(atom)
     if node is not None:
         issues.extend(_reference_issue(node, facts, moments, path))
-    if isinstance(value, Mapping) and "min_s" in value and value["min_s"] >= budget:
-        issues.append(Issue(path, "wait must be shorter than the time budget"))
+    if isinstance(value, Mapping) and "min_s" in value:
+        if value["min_s"] >= budget:
+            issues.append(Issue(path, "wait must be shorter than the time budget"))
+        if not _whole_milliseconds(value["min_s"]):
+            issues.append(Issue(path, "wait must be a whole number of milliseconds"))
     return issues
 
 
@@ -156,6 +166,9 @@ def _clause_tier_issues(
         )
         fact_dependencies = {target for kind, target in all_dependencies if kind == "fact"}
         names = {name for name, _ in clause.positive}
+        silence_count = sum(name == "silence_after_trailoff" for name, _ in clause.positive)
+        if silence_count > 1:
+            issues.append(Issue(f"{path}/unlock", "a path can use only one silence condition"))
         if tier == "surface" and fact_dependencies:
             issues.append(Issue(f"{path}/tier", "surface facts cannot depend on other facts"))
         if tier == "probe" and "followed_up_on" not in names:
@@ -164,6 +177,8 @@ def _clause_tier_issues(
             tiers.get(item) in {"probe", "deep"} for item in fact_dependencies
         ):
             issues.append(Issue(f"{path}/tier", "deep facts must build on a probe or deep fact"))
+        if tier == "deep" and not names & {"followed_up_on", "acknowledged"}:
+            issues.append(Issue(f"{path}/tier", "deep facts need a specific model action"))
     return list({(issue.path, issue.message): issue for issue in issues}.values())
 
 
@@ -189,6 +204,8 @@ def _trigger_dependencies(
             issues.append(Issue(path, "elapsed window must be positive and ordered"))
         elif high >= budget:
             issues.append(Issue(path, "elapsed window must fit inside the time budget"))
+        elif not _whole_milliseconds(low) or not _whole_milliseconds(high):
+            issues.append(Issue(path, "elapsed window must use whole milliseconds"))
         return ({node} if node is not None else set()), issues
     return set(), [Issue(path, "unknown trigger")]
 

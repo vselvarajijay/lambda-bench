@@ -920,7 +920,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 3.2: Rule-based disclosure engine
 
-- [ ] Predicate evaluator, fact state, unlock reasons, event emission, with classification supplied by fixtures.
+- [x] Predicate evaluator, fact state, unlock reasons, event emission, with classification supplied by fixtures.
 - **Run:** `uv run lambda-duplex interviewer simulate dev/ad_feedback_0007.yaml --script tests/fixtures/good_interview.yaml`
 - **Test:** table-driven tests cover every predicate and tier path.
 - **Done when:** the same script always gives the same disclosures and reasons.

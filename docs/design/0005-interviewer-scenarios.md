@@ -10,12 +10,17 @@
 - `silence_after_trailoff(fact, min_s)` is a rule predicate. When every other condition in an unlock clause containing it is met, the persona's reply ends with a trail-off segment recorded in the event log and discloses no locked fact. The timer starts when that segment finishes playing. A substantive onset, as defined in `docs/metrics.md`, cancels it; a backchannel does not. At `min_s`, the condition holds and the persona continues on that tick without another model utterance. A scripted moment pause does not count.
 - `acknowledged(event)` means a substantive model turn acknowledges that fact or scripted moment. A backchannel is not enough.
 - Event references are `{disclosed: fact}` or `{moment: id}`.
+- A negated timing condition on an event, such as `not elapsed_since`, is false until that event has happened.
+- Silence stops at the start of substantive model speech. While audio is being classified, timers hold from the detected speech start. A backchannel releases the hold.
+- Scripted pause time is added to running silence timers when the pause begins.
+- Engine times are integer milliseconds. Boundary times count as elapsed, and an interruption at the same instant as an event counts as after it.
 
 ## Tiers
 
 - Surface facts have no fact dependency.
 - Every usable path to a probe fact needs a specific follow-up.
-- Every usable path to a deep fact builds on a probe or deep fact.
+- Every usable path to a deep fact builds on a probe or deep fact and needs `followed_up_on` or `acknowledged`.
+- A usable path can contain at most one silence condition.
 - Every usable path needs at least one positive condition. Facts with no possible path, and authored `any` branches that contradict themselves, are rejected. Moment dependencies count when applying these tier rules.
 
 ## Scripted moments
