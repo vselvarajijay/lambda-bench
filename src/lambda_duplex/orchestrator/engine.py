@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 from lambda_duplex.adapters.base import (
@@ -45,6 +45,7 @@ class OrchestratorConfig:
     tick_ms: int = DEFAULT_TICK_MS
     clock_mode: ClockMode = "lockstep"
     step_timeout_s: float = 30.0
+    audio_sample_rate: int | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,12 @@ class Counterpart(Protocol):
     async def stop(self) -> None: ...
 
 
+class TickRecorder(Protocol):
+    """Receives the media exchanged during each tick."""
+
+    def record(self, tick: int, incoming: MediaFrame, output: MediaFrame) -> None: ...
+
+
 class _CounterpartFailure(Exception):
     pass
 
@@ -87,6 +94,7 @@ class Orchestrator:
         counterpart: Counterpart,
         config: OrchestratorConfig,
         context: ModelContext | None = None,
+        recorder: TickRecorder | None = None,
     ) -> None:
         if config.max_ticks < 0:
             raise ValueError("max_ticks must not be negative")
@@ -99,6 +107,12 @@ class Orchestrator:
         self._config = config
         self._context = context or ModelContext()
         self._clock = MediaClock(config.tick_ms)
+        self._recorder = recorder
+        self._tick_bytes = (
+            None
+            if config.audio_sample_rate is None
+            else self._clock.samples_per_tick(config.audio_sample_rate) * 2
+        )
         self._events: list[Event] = []
 
     def _append(
@@ -119,6 +133,21 @@ class Orchestrator:
     def _emit(self, source: str, event_type: str, /, **data: Any) -> None:
         self._append(source, event_type, data)
 
+    def _check_audio(self, frame: MediaFrame, owner: str) -> None:
+        if self._tick_bytes is None:
+            return
+        if len(frame.pcm) != self._tick_bytes:
+            raise ValueError(
+                f"{owner} returned {len(frame.pcm)} audio bytes, expected {self._tick_bytes}"
+            )
+        if frame.sample_rate != self._config.audio_sample_rate:
+            raise ValueError(
+                f"{owner} returned sample rate {frame.sample_rate}, "
+                f"expected {self._config.audio_sample_rate}"
+            )
+        if frame.clean_pcm is not None and len(frame.clean_pcm) != self._tick_bytes:
+            raise ValueError(f"{owner} returned clean audio with the wrong length")
+
     def _drain_suite_events(self) -> None:
         for event_type, origin, data in self._counterpart.drain_events():
             self._append("suite", event_type, data, origin)
@@ -135,6 +164,7 @@ class Orchestrator:
                 self._emit("counterpart", "finished")
                 return None
             incoming = await self._counterpart.render(tick)
+            self._check_audio(incoming, "counterpart")
             if incoming.text:
                 self._emit("counterpart", "spoke", text=incoming.text)
             self._drain_suite_events()
@@ -149,11 +179,19 @@ class Orchestrator:
             incoming = await self._counterpart_turn(pending, tick)
             if incoming is None:
                 return "counterpart"
+            model_frame = incoming
+            if self._tick_bytes is not None:
+                model_frame = replace(incoming, text=None, clean_pcm=None)
             result = await asyncio.wait_for(
-                self._adapter.step(incoming, tick), self._config.step_timeout_s
+                self._adapter.step(model_frame, tick), self._config.step_timeout_s
             )
             if result.output.tick != tick:
                 raise ValueError(f"adapter returned tick {result.output.tick} during tick {tick}")
+            self._check_audio(result.output, "adapter")
+            if self._recorder is not None:
+                self._recorder.record(tick, incoming, result.output)
+            if result.truncated_ms > 0:
+                self._emit("model", "truncated", ms=result.truncated_ms)
             if result.output.text:
                 self._emit("model", "spoke", text=result.output.text)
             pending = result.output

@@ -17,6 +17,7 @@ class MediaFrame:
     pcm: bytes = b""
     sample_rate: int | None = None
     text: str | None = None
+    clean_pcm: bytes | None = None
 
 
 @dataclass(frozen=True)
