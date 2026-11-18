@@ -1,0 +1,16 @@
+{"cases": [
+ {"name": "event_unknown_kind", "description": "kind 'applause' is not backchannel, vocal_tic or non_directed", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [{"start_ms": 1000, "end_ms": 3000}], "model": [], "counterpart_events": [{"kind": "applause", "start_ms": 3500, "end_ms": 4000}]}},
+ {"name": "event_kind_turn", "description": "an event may not be a turn", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": "turn", "start_ms": 1000, "end_ms": 2000}]}},
+ {"name": "event_kind_null", "description": "kind null", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": null, "start_ms": 1000, "end_ms": 2000}]}},
+ {"name": "event_end_before_start", "description": "event [2000,1000]", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 1000}]}},
+ {"name": "event_beyond_duration", "description": "event ends at 5001 > 5000", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": "backchannel", "start_ms": 4000, "end_ms": 5001}]}},
+ {"name": "event_negative_start", "description": "event starts at -1", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": "non_directed", "start_ms": -1, "end_ms": 500}]}},
+ {"name": "valid_event_does_not_mask_invalid_event", "description": "first event is valid, second has an unknown kind", "expected_error": "ValueError",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 100, "end_ms": 200}, {"kind": "cough", "start_ms": 300, "end_ms": 400}]}}
+]}

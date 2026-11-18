@@ -1,0 +1,106 @@
+{"cases": [
+ {"name": "yield_latency_1999ms",
+  "description": "Model turn [1000,4999]; C [3000,6000] starts during it. Yield latency 4999-3000 = 1999 <= 2000: a yield. Rate 1/1. No later onset, so resume 0/1.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 3000, "end_ms": 6000}], "model": [{"start_ms": 1000, "end_ms": 4999}]},
+  "expected": {"yield_latency_mean_ms": 1999.0, "yield_rate": 1.0, "resume_rate": 0.0}},
+
+ {"name": "yield_latency_exactly_2000ms_is_a_yield",
+  "description": "Model turn [1000,5000], C starts 3000: latency exactly 2000. Docs: exactly 2000 ms counts as a yield. Rate 1/1, mean 2000, resume 0/1.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 3000, "end_ms": 6000}], "model": [{"start_ms": 1000, "end_ms": 5000}]},
+  "expected": {"yield_latency_mean_ms": 2000.0, "yield_rate": 1.0, "resume_rate": 0.0}},
+
+ {"name": "yield_latency_2001ms_is_not_a_yield",
+  "description": "Model turn [1000,5001], C starts 3000: latency 2001 > 2000. One interruption, zero yields: yield_rate 0/1 = 0, no yields so mean latency and resume rate are null.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 3000, "end_ms": 6000}], "model": [{"start_ms": 1000, "end_ms": 5001}]},
+  "expected": {"yield_latency_mean_ms": null, "yield_rate": 0.0, "resume_rate": null}},
+
+ {"name": "yield_uses_merged_model_turn_end",
+  "description": "Segments [1000,2000] and [2300,3500] (gap 300 < 500) merge into turn [1000,3500]. C [1500,5000] starts during the first segment. Latency is turn end minus C start = 3500-1500 = 2000 (a yield); using the first segment end would give 500.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 1500, "end_ms": 5000}], "model": [{"start_ms": 1000, "end_ms": 2000}, {"start_ms": 2300, "end_ms": 3500}]},
+  "expected": {"yield_latency_mean_ms": 2000.0, "yield_rate": 1.0}},
+
+ {"name": "counterpart_start_during_model_backchannel_is_not_an_interruption",
+  "description": "Model backchannel [1000,1800] (800 ms, no words); C [1500,3000] starts during it. Not a substantive turn, so zero interruptions: yield_rate, yield latency and resume are null. The backchannel overlaps counterpart speech [1500,1800]: benign 1/1 eligible.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 1500, "end_ms": 3000}], "model": [{"start_ms": 1000, "end_ms": 1800}]},
+  "expected": {"yield_rate": {"value": null, "count": 0, "sufficient": false}, "yield_latency_mean_ms": null, "resume_rate": null,
+   "interruption_benign_rate": 1.0}},
+
+ {"name": "yield_latencies_mean_and_rate",
+  "description": "Three interruptions: M [1000,3500] vs C [3000,4000] lat 500; M [13000,15500] vs C [14000,15000] lat 1500; M [24000,29000] vs C [26000,27000] lat 3000 (no yield). Yields 2/3, mean (500+1500)/2 = 1000. Resume: no substantive onset after either yield within 5000 ms of the interrupter end (9000, 20000): 0/2.",
+  "input": {"duration_ms": 40000,
+   "counterpart": [{"start_ms": 3000, "end_ms": 4000}, {"start_ms": 14000, "end_ms": 15000}, {"start_ms": 26000, "end_ms": 27000}],
+   "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 13000, "end_ms": 15500}, {"start_ms": 24000, "end_ms": 29000}]},
+  "expected": {"yield_latency_mean_ms": 1000.0, "yield_rate": 0.6666666667, "resume_rate": 0.0}},
+
+ {"name": "resume_boundary_5000ms_after_interrupter_end",
+  "description": "M1 [1000,3500] yields to C [3000,9000] (lat 500). New onset at 14000 = C end 9000 + 5000: counts (no later than). Measured from the interrupter END (from its start it would be 8000).",
+  "input": {"duration_ms": 30000, "counterpart": [{"start_ms": 3000, "end_ms": 9000}], "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 14000, "end_ms": 15200}]},
+  "expected": {"yield_latency_mean_ms": 500.0, "yield_rate": 1.0, "resume_rate": 1.0}},
+
+ {"name": "resume_5001ms_after_interrupter_end_is_too_late",
+  "description": "Same as the boundary case with the new onset at 14001 = C end + 5001: not a resume. 0/1.",
+  "input": {"duration_ms": 30000, "counterpart": [{"start_ms": 3000, "end_ms": 9000}], "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 14001, "end_ms": 15201}]},
+  "expected": {"yield_latency_mean_ms": 500.0, "yield_rate": 1.0, "resume_rate": 0.0}},
+
+ {"name": "resume_during_the_interrupting_turn",
+  "description": "M1 [1000,3500] yields to C [3000,9000]. A new substantive onset at 7000 is after the yield (3500) and before C ends: still a resume, 1/1.",
+  "input": {"duration_ms": 30000, "counterpart": [{"start_ms": 3000, "end_ms": 9000}], "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 7000, "end_ms": 8200}]},
+  "expected": {"yield_latency_mean_ms": 500.0, "yield_rate": 1.0, "resume_rate": 1.0}},
+
+ {"name": "resume_ignores_backchannel_after_yield",
+  "description": "M1 [1000,3500] yields to C [3000,6000]. Only a backchannel [7000,7500] follows: not a substantive onset, so no resume, 0/1.",
+  "input": {"duration_ms": 30000, "counterpart": [{"start_ms": 3000, "end_ms": 6000}], "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 7000, "end_ms": 7500}]},
+  "expected": {"yield_latency_mean_ms": 500.0, "yield_rate": 1.0, "resume_rate": 0.0}},
+
+ {"name": "resume_rate_one_yield_one_non_yield",
+  "description": "Yield: M1 [1000,3500] vs C1 [3000,4000] lat 500, followed by M2 onset 6000 (<= 9000): resumed. Non-yield: M3 [9000,15000] vs C2 [10000,11000], lat 5000. yield_rate 1/2, mean 500. AMBIGUOUS denominator for resume_rate: yielded interruptions (1/1 = 1.0) is asserted; all interruptions would give 0.5.",
+  "input": {"duration_ms": 20000,
+   "counterpart": [{"start_ms": 3000, "end_ms": 4000}, {"start_ms": 10000, "end_ms": 11000}],
+   "model": [{"start_ms": 1000, "end_ms": 3500}, {"start_ms": 6000, "end_ms": 7200}, {"start_ms": 9000, "end_ms": 15000}]},
+  "expected": {"yield_latency_mean_ms": 500.0, "yield_rate": 0.5, "resume_rate": 1.0}},
+
+ {"name": "pause_tolerance_onset_199ms_after_pause_end",
+  "description": "C [0,8000] with scripted pause [3000,5000]. Onset 5199 is 199 ms after the pause end, inside the 200 ms grace: pause failure, tolerance 0/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 5199, "end_ms": 6399}]},
+  "expected": {"pause_tolerance": {"value": 0.0, "count": 1, "sufficient": false}}},
+
+ {"name": "pause_tolerance_onset_exactly_200ms_after_pause_end",
+  "description": "Onset 5200 = pause end + 200. AMBIGUOUS boundary: 'until 200 ms after its end' read as inclusive, so a failure, 0/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 5200, "end_ms": 6400}]},
+  "expected": {"pause_tolerance": 0.0}},
+
+ {"name": "pause_tolerance_onset_201ms_after_pause_end",
+  "description": "Onset 5201 is past the grace: tolerated, 1/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 5201, "end_ms": 6401}]},
+  "expected": {"pause_tolerance": 1.0}},
+
+ {"name": "pause_tolerance_onset_at_pause_start",
+  "description": "Onset 3000 = pause start: window runs from the pause start, so a failure, 0/1. The same onset is an early start for timing: early 1/1, answered, no latency.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 3000, "end_ms": 4200}]},
+  "expected": {"pause_tolerance": 0.0, "early_start_rate": 1.0, "response_rate": 1.0, "response_latency_mean_ms": null}},
+
+ {"name": "pause_tolerance_onset_before_pause_start",
+  "description": "Onset 2999 is 1 ms before the pause start; the turn runs on into the pause but no new onset occurs from the pause start: tolerated, 1/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 2999, "end_ms": 4199}]},
+  "expected": {"pause_tolerance": 1.0}},
+
+ {"name": "pause_tolerance_backchannel_in_pause_is_tolerated",
+  "description": "Backchannel [3500,4000] (500 ms) inside the scripted pause is not a substantive onset: tolerated, 1/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 8000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}]}], "model": [{"start_ms": 3500, "end_ms": 4000}]},
+  "expected": {"pause_tolerance": 1.0, "backchannel_well_placed_rate": 1.0}},
+
+ {"name": "pause_tolerance_half_of_two_pauses",
+  "description": "Scripted pauses [3000,5000] and [8000,10000] in C [0,12000]. Onset 3000 breaks the first; nothing in the second window [8000,10200]. Tolerance 1/2, count 2.",
+  "input": {"duration_ms": 14000, "counterpart": [{"start_ms": 0, "end_ms": 12000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}, {"start_ms": 8000, "end_ms": 10000}]}], "model": [{"start_ms": 3000, "end_ms": 4200}]},
+  "expected": {"pause_tolerance": {"value": 0.5, "count": 2, "sufficient": false}}},
+
+ {"name": "pause_tolerance_all_tolerated_without_model_speech",
+  "description": "Two scripted pauses, silent model: 2/2 tolerated.",
+  "input": {"duration_ms": 14000, "counterpart": [{"start_ms": 0, "end_ms": 12000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 5000}, {"start_ms": 8000, "end_ms": 10000}]}], "model": []},
+  "expected": {"pause_tolerance": 1.0, "yield_rate": null}},
+
+ {"name": "pause_tolerance_null_without_scripted_pauses",
+  "description": "No scripted pauses: pause_tolerance is undefined (0 denominator).",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 7000, "end_ms": 8200}]},
+  "expected": {"pause_tolerance": {"value": null, "count": 0, "sufficient": false}}}
+]}

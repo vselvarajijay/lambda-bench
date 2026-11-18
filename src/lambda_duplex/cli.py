@@ -16,7 +16,9 @@ from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
 from lambda_duplex.metrics.conversation import (
     ConversationTimeline,
+    conversation_metrics,
     metrics_to_dict,
+    overlap_metrics,
     timeline_from_dict,
     timing_metrics,
 )
@@ -244,7 +246,12 @@ def _load_metric_timeline(path: Path) -> ConversationTimeline:
 def _metrics(args: argparse.Namespace) -> int:
     try:
         timeline = _load_metric_timeline(args.path)
-        metrics = timing_metrics(timeline)
+        groups = {
+            "all": conversation_metrics,
+            "timing": timing_metrics,
+            "overlap": overlap_metrics,
+        }
+        metrics = groups[args.group](timeline)
     except (
         KeyError,
         OSError,
@@ -383,6 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--k", type=int, default=1, help="trials per scenario")
     metrics = commands.add_parser("metrics", help="compute conversation metrics")
     metrics.add_argument("path", type=Path, help="timeline JSON file or timed run directory")
+    metrics.add_argument("--group", choices=("all", "timing", "overlap"), default="all")
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")

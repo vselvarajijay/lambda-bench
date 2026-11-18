@@ -1,0 +1,107 @@
+{"cases": [
+ {"name": "bc_overlapping_speech_mid_turn",
+  "description": "C [0,6000] (0.1 min). Backchannel [2000,2500] overlaps counterpart speech: benign 1/1, 10 per minute. Backchannel rate 1/0.1 = 10. Starts 4000 ms from the turn end and in no pause: not well placed, 0/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"interruption_benign_rate": 1.0, "interruption_benign_per_minute": 10.0, "interruption_mid_sentence_rate": 0.0,
+   "backchannel_per_minute": 10.0, "backchannel_well_placed_rate": {"value": 0.0, "count": 1, "sufficient": false}}},
+
+ {"name": "bc_partially_overlapping_turn_end",
+  "description": "Backchannel [5800,6300] overlaps C [0,6000] by 200 ms: benign. Starts 200 ms before the turn end: well placed.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 5800, "end_ms": 6300}]},
+  "expected": {"interruption_benign_rate": 1.0, "interruption_benign_per_minute": 10.0, "backchannel_per_minute": 10.0, "backchannel_well_placed_rate": 1.0}},
+
+ {"name": "bc_inside_scripted_pause_not_overlapping_speech",
+  "description": "C [0,7000] with scripted pause [3000,4000]: speech 6000. Backchannel [3200,3700] lies entirely in the pause, overlapping no counterpart speech: not benign (0/1). It still counts for backchannel rate (10 per minute) and starts inside a pause: well placed 1/1.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 7000, "scripted_pauses": [{"start_ms": 3000, "end_ms": 4000}]}], "model": [{"start_ms": 3200, "end_ms": 3700}]},
+  "expected": {"interruption_benign_rate": 0.0, "interruption_benign_per_minute": 0.0, "interruption_pause_cut_in_rate": 0.0,
+   "backchannel_per_minute": 10.0, "backchannel_well_placed_rate": 1.0}},
+
+ {"name": "bc_inside_unscripted_pause_not_overlapping_speech",
+  "description": "As above with an unscripted pause [3000,4000]: not benign, well placed, 10 per minute.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 7000, "pauses": [{"start_ms": 3000, "end_ms": 4000}]}], "model": [{"start_ms": 3200, "end_ms": 3700}]},
+  "expected": {"interruption_benign_rate": 0.0, "interruption_benign_per_minute": 0.0, "backchannel_per_minute": 10.0, "backchannel_well_placed_rate": 1.0}},
+
+ {"name": "bc_in_silence_after_turn_does_not_overlap",
+  "description": "Backchannel [8000,8500] is 2000 ms after C [0,6000] ends: not benign, still 10 per minute, not well placed (0/1).",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 8000, "end_ms": 8500}]},
+  "expected": {"interruption_benign_rate": 0.0, "interruption_benign_per_minute": 0.0, "backchannel_per_minute": 10.0, "backchannel_well_placed_rate": 0.0}},
+
+ {"name": "bc_start_300ms_before_turn_end_is_well_placed",
+  "description": "Backchannel [5700,6200] starts exactly 300 ms before the turn end: within 300 ms, well placed. Benign (overlaps speech).",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 5700, "end_ms": 6200}]},
+  "expected": {"backchannel_well_placed_rate": 1.0, "interruption_benign_rate": 1.0}},
+
+ {"name": "bc_start_301ms_before_turn_end_is_not_well_placed",
+  "description": "Backchannel [5699,6199] starts 301 ms before the turn end: not well placed. Benign (overlaps speech).",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 5699, "end_ms": 6199}]},
+  "expected": {"backchannel_well_placed_rate": 0.0, "interruption_benign_rate": 1.0}},
+
+ {"name": "bc_start_300ms_after_turn_end_is_well_placed",
+  "description": "Backchannel [6300,6800] starts exactly 300 ms after the turn end: well placed. No overlap with speech: not benign.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 6300, "end_ms": 6800}]},
+  "expected": {"backchannel_well_placed_rate": 1.0, "interruption_benign_rate": 0.0}},
+
+ {"name": "bc_start_301ms_after_turn_end_is_not_well_placed",
+  "description": "Backchannel [6301,6801] starts 301 ms after the turn end: not well placed, not benign.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 6301, "end_ms": 6801}]},
+  "expected": {"backchannel_well_placed_rate": 0.0, "interruption_benign_rate": 0.0}},
+
+ {"name": "bc_start_300ms_before_pause_start_is_well_placed",
+  "description": "C [0,6800] with pause [3000,3800]: speech 6000. Backchannel [2700,3200] starts exactly 300 ms before the pause start: well placed. Starts in speech and overlaps it: benign.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6800, "pauses": [{"start_ms": 3000, "end_ms": 3800}]}], "model": [{"start_ms": 2700, "end_ms": 3200}]},
+  "expected": {"backchannel_well_placed_rate": 1.0, "interruption_benign_rate": 1.0, "backchannel_per_minute": 10.0}},
+
+ {"name": "bc_start_301ms_before_pause_start_is_not_well_placed",
+  "description": "Backchannel [2699,3199] starts 301 ms before the pause start (turn end 6800 is far): not well placed.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6800, "pauses": [{"start_ms": 3000, "end_ms": 3800}]}], "model": [{"start_ms": 2699, "end_ms": 3199}]},
+  "expected": {"backchannel_well_placed_rate": 0.0, "interruption_benign_rate": 1.0}},
+
+ {"name": "bc_start_300ms_after_pause_end_is_well_placed",
+  "description": "Pause [3000,3800]. Backchannel [4100,4600] starts exactly 300 ms after the pause end: well placed. Overlaps speech: benign.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6800, "pauses": [{"start_ms": 3000, "end_ms": 3800}]}], "model": [{"start_ms": 4100, "end_ms": 4600}]},
+  "expected": {"backchannel_well_placed_rate": 1.0, "interruption_benign_rate": 1.0}},
+
+ {"name": "bc_start_301ms_after_pause_end_is_not_well_placed",
+  "description": "Pause [3000,3800]. Backchannel [4101,4601] starts 301 ms after the pause end and far from the turn end 6800: not well placed.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6800, "pauses": [{"start_ms": 3000, "end_ms": 3800}]}], "model": [{"start_ms": 4101, "end_ms": 4601}]},
+  "expected": {"backchannel_well_placed_rate": 0.0, "interruption_benign_rate": 1.0}},
+
+ {"name": "bc_mixed_placement_two_backchannels",
+  "description": "C [0,6000]. Backchannels [2000,2500] (not placed) and [5700,6200] (300 ms before end, placed). Both overlap speech: benign count 2 over 1 eligible turn = 2.0, per minute 20. Backchannel per minute 2/0.1 = 20. Well placed 1/2.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 2500}, {"start_ms": 5700, "end_ms": 6200}]},
+  "expected": {"interruption_benign_rate": 2.0, "interruption_benign_per_minute": 20.0, "backchannel_per_minute": 20.0,
+   "backchannel_well_placed_rate": {"value": 0.5, "count": 2, "sufficient": false}}},
+
+ {"name": "bc_duration_999ms_is_a_backchannel",
+  "description": "Model turn [2000,2999] is 999 ms of speech, no word counts: backchannel. Benign 1/1; mid-sentence 0.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 2999}]},
+  "expected": {"interruption_benign_rate": 1.0, "interruption_mid_sentence_rate": 0.0, "backchannel_per_minute": 10.0}},
+
+ {"name": "bc_duration_1000ms_is_substantive",
+  "description": "Model turn [2000,3000] is exactly 1000 ms: not a backchannel (needs less than 1000). Substantive mid-sentence onset; no backchannels, so backchannel rate 0 and placement undefined (null).",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 3000}]},
+  "expected": {"interruption_benign_rate": 0.0, "interruption_mid_sentence_rate": 1.0, "interruption_mid_sentence_per_minute": 10.0,
+   "backchannel_per_minute": 0.0, "backchannel_well_placed_rate": {"value": null, "count": 0, "sufficient": false}}},
+
+ {"name": "bc_three_words_short_turn_is_a_backchannel",
+  "description": "500 ms with 3 words: backchannel, benign.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 2500, "words": 3}]},
+  "expected": {"interruption_benign_rate": 1.0, "interruption_mid_sentence_rate": 0.0, "backchannel_per_minute": 10.0}},
+
+ {"name": "bc_four_words_short_turn_is_substantive",
+  "description": "500 ms with 4 words: substantive. Mid-sentence 1/1, no backchannels.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 2000, "end_ms": 2500, "words": 4}]},
+  "expected": {"interruption_benign_rate": 0.0, "interruption_mid_sentence_rate": 1.0, "backchannel_per_minute": 0.0,
+   "backchannel_well_placed_rate": null}},
+
+ {"name": "bc_zero_counterpart_speech",
+  "description": "No counterpart turns. Backchannel [1000,1500]: per-minute metrics have 0 minutes of counterpart speech (null); benign rate has 0 eligible turns (null). Not placed near anything: well placed 0/1.",
+  "input": {"duration_ms": 5000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 1500}]},
+  "expected": {"backchannel_per_minute": null, "interruption_benign_rate": null, "interruption_benign_per_minute": null,
+   "interruption_mid_sentence_per_minute": null, "backchannel_well_placed_rate": 0.0}},
+
+ {"name": "bc_none_with_counterpart_speech",
+  "description": "Substantive model turn only, after the turn: backchannel rate 0/0.1 min = 0, placement null.",
+  "input": {"duration_ms": 10000, "counterpart": [{"start_ms": 0, "end_ms": 6000}], "model": [{"start_ms": 7000, "end_ms": 8200}]},
+  "expected": {"backchannel_per_minute": 0.0, "backchannel_well_placed_rate": null}}
+]}

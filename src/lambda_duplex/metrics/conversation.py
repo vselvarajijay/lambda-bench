@@ -12,6 +12,15 @@ MODEL_TURN_MERGE_MS = 500.0
 BACKCHANNEL_MAX_MS = 1000.0
 BACKCHANNEL_MAX_WORDS = 3
 MIN_SUPPORT = 10
+PAUSE_CUT_IN_MIN_MS = 600.0
+BENIGN_TAIL_MS = 300.0
+YIELD_WINDOW_MS = 2000.0
+RESUME_WINDOW_MS = 5000.0
+PAUSE_GRACE_MS = 200.0
+BACKCHANNEL_BOUNDARY_MS = 300.0
+SELECTIVITY_YIELD_MS = 1000.0
+SELECTIVITY_RESPONSE_MS = 2000.0
+COUNTERPART_EVENT_KINDS = frozenset({"backchannel", "vocal_tic", "non_directed"})
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,15 @@ class CounterpartTurn:
 
 
 @dataclass(frozen=True)
+class CounterpartEvent:
+    """Counterpart sound that should not count as a new conversational turn."""
+
+    kind: str
+    start_ms: float
+    end_ms: float
+
+
+@dataclass(frozen=True)
 class ModelSegment:
     start_ms: float
     end_ms: float
@@ -61,6 +79,7 @@ class ConversationTimeline:
     model: tuple[ModelSegment, ...]
     goal_ms: float | None = None
     talk_target: tuple[float, float] | None = None
+    counterpart_events: tuple[CounterpartEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,6 +114,11 @@ def validate_timeline(timeline: ConversationTimeline) -> None:
             if pause.end_ms < pause.start_ms:
                 raise ValueError("pause end must not precede its start")
             previous = pause.end_ms
+    for event in timeline.counterpart_events:
+        if event.kind not in COUNTERPART_EVENT_KINDS:
+            raise ValueError(f"unknown counterpart event kind: {event.kind}")
+        if not 0 <= event.start_ms <= event.end_ms <= timeline.duration_ms:
+            raise ValueError("counterpart events must be within the conversation")
     if timeline.goal_ms is not None and not 0 <= timeline.goal_ms <= timeline.duration_ms:
         raise ValueError("goal_ms must be within the conversation")
     if timeline.talk_target is not None:
@@ -195,7 +219,8 @@ def timing_metrics(timeline: ConversationTimeline) -> dict[str, MetricValue]:
     }
     model_speech = [Interval(item.start_ms, item.end_ms) for item in timeline.model]
     counterpart_speech = [
-        part for turn in timeline.counterpart for part in _counterpart_speech(turn)
+        *(part for turn in timeline.counterpart for part in _counterpart_speech(turn)),
+        *(Interval(event.start_ms, event.end_ms) for event in timeline.counterpart_events),
     ]
     model_ms = _union_ms(model_speech)
     counterpart_ms = _union_ms(counterpart_speech)
@@ -209,9 +234,10 @@ def timing_metrics(timeline: ConversationTimeline) -> dict[str, MetricValue]:
     scripted = [pause for turn in timeline.counterpart for pause in turn.scripted_pauses]
     scripted_ms = sum(item.duration_ms for item in scripted)
     active_ms = timeline.duration_ms - scripted_ms
-    occupied = _union_ms([*model_speech, *counterpart_speech])
-    overlap_scripted = _union_ms([*scripted, *model_speech]) - _union_ms(model_speech)
-    silent_ms = timeline.duration_ms - occupied - overlap_scripted
+    all_speech = [*model_speech, *counterpart_speech]
+    occupied = _union_ms(all_speech)
+    speech_in_scripted = occupied + _union_ms(scripted) - _union_ms([*all_speech, *scripted])
+    silent_ms = active_ms - (occupied - speech_in_scripted)
     dead_air = silent_ms / active_ms if active_ms > 0 else None
     metrics["dead_air_ratio"] = _metric(dead_air, 1 if active_ms > 0 else 0)
     reached = timeline.goal_ms is not None
@@ -222,6 +248,132 @@ def timing_metrics(timeline: ConversationTimeline) -> dict[str, MetricValue]:
         sum(turn.start_ms <= end_ms for turn in substantive), 1
     )
     return metrics
+
+
+def _inside(time_ms: float, item: Interval) -> bool:
+    return item.start_ms <= time_ms < item.end_ms
+
+
+def _overlaps(first: Interval, second: Interval) -> bool:
+    return first.start_ms < second.end_ms and second.start_ms < first.end_ms
+
+
+def _per_minute(count: int, speech_ms: float, support: int) -> MetricValue:
+    return _metric(count / (speech_ms / 60_000) if speech_ms > 0 else None, support)
+
+
+def _speaking_turn(turns: Sequence[ModelTurn], time_ms: float) -> ModelTurn | None:
+    return next((turn for turn in turns if turn.start_ms < time_ms < turn.end_ms), None)
+
+
+def _classify_onset(onset: float, turn: CounterpartTurn) -> str:
+    for pause in (*turn.scripted_pauses, *turn.pauses):
+        if _inside(onset, pause) and (
+            pause in turn.scripted_pauses or pause.duration_ms >= PAUSE_CUT_IN_MIN_MS
+        ):
+            return "pause_cut_in"
+    return "benign" if onset >= turn.end_ms - BENIGN_TAIL_MS else "mid_sentence"
+
+
+def _selectivity(
+    timeline: ConversationTimeline, kind: str, substantive: Sequence[ModelTurn]
+) -> MetricValue:
+    correct = total = 0
+    for event in timeline.counterpart_events:
+        if event.kind != kind:
+            continue
+        speaking = _speaking_turn(substantive, event.start_ms)
+        if speaking is not None:
+            total += 1
+            correct += speaking.end_ms > event.start_ms + SELECTIVITY_YIELD_MS
+            continue
+        if kind == "backchannel" or any(
+            _inside(event.start_ms, Interval(turn.start_ms, turn.end_ms))
+            for turn in timeline.counterpart
+        ):
+            continue
+        total += 1
+        limit = event.end_ms + SELECTIVITY_RESPONSE_MS
+        correct += not any(event.start_ms <= turn.start_ms <= limit for turn in substantive)
+    return _ratio(correct, total)
+
+
+def overlap_metrics(timeline: ConversationTimeline) -> dict[str, MetricValue]:
+    """Compute interruption, yielding, pause, backchannel, and selectivity metrics."""
+    validate_timeline(timeline)
+    turns = model_turns(timeline.model)
+    substantive = [turn for turn in turns if not turn.backchannel]
+    backchannels = [turn for turn in turns if turn.backchannel]
+    counterpart = timeline.counterpart
+    eligible = sum(turn.eligible for turn in counterpart)
+    speech_parts = [part for turn in counterpart for part in _counterpart_speech(turn)]
+    speech_ms = _union_ms(speech_parts)
+    counts = {"benign": 0, "pause_cut_in": 0, "mid_sentence": 0}
+    for model_turn in substantive:
+        for turn in counterpart:
+            if _inside(model_turn.start_ms, Interval(turn.start_ms, turn.end_ms)):
+                counts[_classify_onset(model_turn.start_ms, turn)] += 1
+                break
+    counts["benign"] += sum(
+        any(_overlaps(Interval(turn.start_ms, turn.end_ms), part) for part in speech_parts)
+        for turn in backchannels
+    )
+    metrics: dict[str, MetricValue] = {}
+    for name, count in counts.items():
+        metrics[f"interruption_{name}_rate"] = _metric(
+            count / eligible if eligible else None, eligible
+        )
+        metrics[f"interruption_{name}_per_minute"] = _per_minute(count, speech_ms, eligible)
+    latencies: list[float] = []
+    interruptions = resumed = 0
+    for turn in counterpart:
+        speaking = _speaking_turn(substantive, turn.start_ms)
+        if speaking is None:
+            continue
+        interruptions += 1
+        latency = speaking.end_ms - turn.start_ms
+        if latency > YIELD_WINDOW_MS:
+            continue
+        latencies.append(latency)
+        limit = turn.end_ms + RESUME_WINDOW_MS
+        resumed += any(speaking.end_ms < item.start_ms <= limit for item in substantive)
+    yielded = len(latencies)
+    metrics["yield_latency_mean_ms"] = _metric(
+        sum(latencies) / yielded if yielded else None, yielded
+    )
+    metrics["yield_rate"] = _ratio(yielded, interruptions)
+    metrics["resume_rate"] = _ratio(resumed, yielded)
+    scripted = [pause for turn in counterpart for pause in turn.scripted_pauses]
+    tolerated = sum(
+        not any(
+            pause.start_ms <= item.start_ms <= pause.end_ms + PAUSE_GRACE_MS for item in substantive
+        )
+        for pause in scripted
+    )
+    metrics["pause_tolerance"] = _ratio(tolerated, len(scripted))
+    boundaries = [
+        value
+        for turn in counterpart
+        for pause in (*turn.pauses, *turn.scripted_pauses)
+        for value in (pause.start_ms, pause.end_ms)
+    ] + [turn.end_ms for turn in counterpart]
+    pauses = [pause for turn in counterpart for pause in (*turn.pauses, *turn.scripted_pauses)]
+    placed = sum(
+        any(_inside(item.start_ms, pause) for pause in pauses)
+        or any(abs(item.start_ms - value) <= BACKCHANNEL_BOUNDARY_MS for value in boundaries)
+        for item in backchannels
+    )
+    metrics["backchannel_per_minute"] = _per_minute(len(backchannels), speech_ms, len(backchannels))
+    metrics["backchannel_well_placed_rate"] = _ratio(placed, len(backchannels))
+    metrics["selectivity_backchannel"] = _selectivity(timeline, "backchannel", substantive)
+    metrics["selectivity_vocal_tic"] = _selectivity(timeline, "vocal_tic", substantive)
+    metrics["selectivity_non_directed"] = _selectivity(timeline, "non_directed", substantive)
+    return metrics
+
+
+def conversation_metrics(timeline: ConversationTimeline) -> dict[str, MetricValue]:
+    """Compute all core conversation metrics."""
+    return {**timing_metrics(timeline), **overlap_metrics(timeline)}
 
 
 def metrics_to_dict(metrics: Mapping[str, MetricValue]) -> dict[str, dict[str, Any]]:
@@ -254,4 +406,8 @@ def timeline_from_dict(data: Mapping[str, Any]) -> ConversationTimeline:
         ),
         goal_ms=None if goal is None else float(goal),
         talk_target=None if target is None else (float(target[0]), float(target[1])),
+        counterpart_events=tuple(
+            CounterpartEvent(str(item["kind"]), float(item["start_ms"]), float(item["end_ms"]))
+            for item in data.get("counterpart_events", ())
+        ),
     )
