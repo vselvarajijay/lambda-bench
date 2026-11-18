@@ -25,6 +25,29 @@ All times are milliseconds on the conversation clock. Counterpart turns come fro
 | `time_to_goal_ms` | Goal time, or conversation duration if the goal was not reached. | Project definition |
 | `model_turns_to_goal` | Substantive model turns starting at or before that time. | Project definition |
 
+## Overlap behavior
+
+A **counterpart event** is a backchannel, vocal tic, or non-directed remark. It counts as counterpart speech for balance and dead air, but it is not a conversational turn.
+
+| Metric | Definition | Alignment |
+|---|---|---|
+| `interruption_benign_*` | Substantive onsets during the last 300 ms of a counterpart turn, plus model backchannels overlapping counterpart speech. | Project definition |
+| `interruption_pause_cut_in_*` | Substantive onsets inside a scripted pause, or inside another mid-turn silence of at least 600 ms. | Full-Duplex-Bench pause handling, as takeover |
+| `interruption_mid_sentence_*` | Other substantive onsets inside a counterpart turn, including inside silences shorter than 600 ms. | τ-voice `I_A`, subdivided |
+| `*_rate`, `*_per_minute` | Count divided by eligible turns, or by minutes of counterpart turn speech. | τ-voice `I_A` |
+| `yield_latency_mean_ms` | When a counterpart turn starts during a substantive model turn, model turn end minus that start, averaged over yields within 2000 ms. | τ-voice `L_Y`; Full-Duplex-Bench v1.5 stop latency |
+| `yield_rate` | Yields within 2000 ms divided by those interruptions. Exactly 2000 ms counts as a yield. | τ-voice `R_Y` |
+| `resume_rate` | Yielded interruptions followed by a new substantive onset after the yield and no later than 5000 ms after the interrupting turn ends. | Project definition |
+| `pause_tolerance` | Scripted pauses with no substantive onset from the pause start through 200 ms after its end, divided by scripted pauses. | Full-Duplex-Bench take-over rate, inverted |
+| `backchannel_per_minute` | Model backchannels per minute of counterpart turn speech. | Full-Duplex-Bench backchannel task |
+| `backchannel_well_placed_rate` | Backchannels starting inside a counterpart pause, or within 300 ms of a pause edge or turn end, divided by backchannels. | Project definition |
+| `selectivity_backchannel` | Counterpart backchannels during a substantive model turn where the model keeps speaking for more than 1000 ms after the event starts. | τ-voice `S_BC` |
+| `selectivity_vocal_tic`, `selectivity_non_directed` | While the model speaks, the same rule as backchannels. While it is silent outside any counterpart turn, the event is handled correctly if no substantive onset occurs from its start through 2000 ms after its end. | τ-voice `S_VT`, `S_ND` |
+
+Interruption rates and per-minute values use eligible turns as their supporting count. Onsets inside ineligible turns are still classified, and ineligible turns still count as counterpart speech. `resume_rate` uses yielded interruptions as its denominator. Speech that overlaps is counted once in balance and dead-air calculations. Time inside scripted pauses is excluded from dead air, even when a counterpart event or model speech occurs there. A counterpart backchannel while the model is silent is not scored by `selectivity_backchannel`.
+
+Whether the model recovers the thread of the conversation is a judge item and is not measured here.
+
 ## Edge cases
 
 - `talk_time_in_target` is null when nobody spoke, because the ratio is undefined.

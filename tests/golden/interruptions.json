@@ -1,0 +1,46 @@
+{
+ "name": "interruptions",
+ "description": "Slice 2.4 CLI fixture. Ca [0,6000], Cb [10000,16600] with pause [13000,13600] (600 ms), Cc [20000,26000]; counterpart speech 6000+6000+6000 = 18000 ms = 0.3 min. Model: backchannel [2000,2500] (overlaps Ca speech: benign), [5800,7000] (200 ms before Ca end: benign), [13200,14400] (inside the 600 ms pause: pause cut-in), [21000,22200] (mid-sentence in Cc). Benign 2/3 (6.6667 per min), pause cut-in 1/3 (3.3333), mid-sentence 1/3 (3.3333). Backchannel rate 1/0.3 = 3.3333, starts 4000 ms from Ca end: well placed 0/1. No counterpart turn starts during a substantive model turn: yield and resume null. No scripted pauses: pause tolerance null. Vocal tic event [8000,8300] outside any turn, model silent, next onset 13200 > 10300: selectivity 1/1; other kinds null. Timing: every turn answered early (5800<6000, 13200<16600, 21000<26000): response 3/3, early 3/3, no latency. Model speech 500+3*1200 = 4100; counterpart 18000+300 (event) = 18300: ratio 4100/22400 = 0.18303571. Occupied: C speech 18000 + [6000,7000] 1000 + [13200,13600] 400 + event 300 = 19700 of 30000: dead 10300/30000 = 0.34333333. Goal censored at 30000 with 3 substantive turns.",
+ "duration_ms": 30000,
+ "counterpart": [
+  {"start_ms": 0, "end_ms": 6000},
+  {"start_ms": 10000, "end_ms": 16600, "pauses": [{"start_ms": 13000, "end_ms": 13600}]},
+  {"start_ms": 20000, "end_ms": 26000}
+ ],
+ "model": [
+  {"start_ms": 2000, "end_ms": 2500},
+  {"start_ms": 5800, "end_ms": 7000},
+  {"start_ms": 13200, "end_ms": 14400},
+  {"start_ms": 21000, "end_ms": 22200}
+ ],
+ "counterpart_events": [
+  {"kind": "vocal_tic", "start_ms": 8000, "end_ms": 8300}
+ ],
+ "expected": {
+  "interruption_benign_rate": {"value": 0.6666666667, "count": 3, "sufficient": false},
+  "interruption_benign_per_minute": 6.6666666667,
+  "interruption_pause_cut_in_rate": 0.3333333333,
+  "interruption_pause_cut_in_per_minute": 3.3333333333,
+  "interruption_mid_sentence_rate": 0.3333333333,
+  "interruption_mid_sentence_per_minute": 3.3333333333,
+  "yield_latency_mean_ms": null,
+  "yield_rate": null,
+  "resume_rate": null,
+  "pause_tolerance": null,
+  "backchannel_per_minute": 3.3333333333,
+  "backchannel_well_placed_rate": 0.0,
+  "selectivity_backchannel": null,
+  "selectivity_vocal_tic": {"value": 1.0, "count": 1, "sufficient": false},
+  "selectivity_non_directed": null,
+  "response_rate": 1.0,
+  "early_start_rate": 1.0,
+  "response_latency_mean_ms": null,
+  "response_latency_p50_ms": null,
+  "response_latency_p90_ms": null,
+  "talk_time_ratio": 0.1830357143,
+  "dead_air_ratio": 0.3433333333,
+  "goal_reached": false,
+  "time_to_goal_ms": 30000,
+  "model_turns_to_goal": 3
+ }
+}

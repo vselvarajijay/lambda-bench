@@ -822,7 +822,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.4: Metrics B: overlap behavior
 
-- [ ] Interruption classes, yielding, resume, pause tolerance, backchannels, selectivity.
+- [x] Interruption classes, yielding, resume, pause tolerance, backchannels, selectivity.
 - **Run:** `uv run lambda-duplex metrics tests/golden/interruptions.json`
 - **Test:** one golden case per class and each boundary value.
 - **Done when:** results match, and `docs/metrics.md` cites each aligned definition.

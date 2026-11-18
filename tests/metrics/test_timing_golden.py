@@ -147,7 +147,7 @@ def test_metrics_to_dict_shape_is_sorted_and_complete() -> None:
 
 def test_cli_metrics_on_basic_turns(capsys: pytest.CaptureFixture[str]) -> None:
     path = GOLDEN / "basic_turns.json"
-    assert cli.main(["metrics", str(path)]) == 0
+    assert cli.main(["metrics", str(path), "--group", "timing"]) == 0
     assert_matches(json.loads(capsys.readouterr().out), _basic_case()["expected"])
 
 
@@ -156,7 +156,7 @@ def test_cli_metrics_on_empty_conversation(
 ) -> None:
     path = tmp_path / "empty.json"
     path.write_text(json.dumps({"duration_ms": 0, "counterpart": [], "model": []}))
-    assert cli.main(["metrics", str(path)]) == 0
+    assert cli.main(["metrics", str(path), "--group", "timing"]) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["response_rate"] == {"value": None, "count": 0, "sufficient": False}
     assert result["talk_time_ratio"]["value"] is None

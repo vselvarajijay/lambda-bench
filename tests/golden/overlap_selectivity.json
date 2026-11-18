@@ -1,0 +1,103 @@
+{"cases": [
+ {"name": "sel_backchannel_model_keeps_speaking_1001ms",
+  "description": "Substantive model turn [1000,3001]; counterpart backchannel event [2000,2300] starts during it. Model speaks 3001-2000 = 1001 ms after the event start: more than 1000, handled. 1/1.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3001}], "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_backchannel": {"value": 1.0, "count": 1, "sufficient": false}, "selectivity_vocal_tic": null, "selectivity_non_directed": null}},
+
+ {"name": "sel_backchannel_model_keeps_speaking_exactly_1000ms",
+  "description": "Model turn [1000,3000], event at 2000: exactly 1000 ms remain. 'More than 1000' is not met: not handled, 0/1.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3000}], "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_backchannel": 0.0}},
+
+ {"name": "sel_backchannel_model_keeps_speaking_999ms",
+  "description": "Model turn [1000,2999], event at 2000: 999 ms remain, not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 2999}], "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_backchannel": 0.0}},
+
+ {"name": "sel_backchannel_uses_merged_turn_end",
+  "description": "Segments [1000,2400] and [2700,3300] (gap 300 < 500) merge into one turn [1000,3300]. Event at 2000: 3300-2000 = 1300 > 1000 handled. Using the first segment end (400 ms) would fail it.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 2400}, {"start_ms": 2700, "end_ms": 3300}], "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_backchannel": 1.0}},
+
+ {"name": "sel_backchannel_two_events_one_handled",
+  "description": "Turns [1000,3001] and [10000,12000]. Events at 2000 (1001 ms remain, handled) and 11000 (1000 ms, not handled). 1/2 = 0.5, count 2.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3001}, {"start_ms": 10000, "end_ms": 12000}],
+   "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}, {"kind": "backchannel", "start_ms": 11000, "end_ms": 11200}]},
+  "expected": {"selectivity_backchannel": {"value": 0.5, "count": 2, "sufficient": false}}},
+
+ {"name": "sel_vocal_tic_while_model_speaks_1001ms",
+  "description": "Same rule as backchannels while the model speaks: model turn [1000,3001], tic at 2000: 1001 ms remain, handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3001}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_vocal_tic": 1.0, "selectivity_backchannel": null, "selectivity_non_directed": null}},
+
+ {"name": "sel_vocal_tic_while_model_speaks_exactly_1000ms",
+  "description": "Model turn [1000,3000], tic at 2000: exactly 1000 ms remain, not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3000}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_vocal_tic": 0.0}},
+
+ {"name": "sel_non_directed_while_model_speaks_1001ms",
+  "description": "Non-directed remark at 2000 during model turn [1000,3001]: handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3001}], "counterpart_events": [{"kind": "non_directed", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_non_directed": 1.0, "selectivity_backchannel": null, "selectivity_vocal_tic": null}},
+
+ {"name": "sel_non_directed_while_model_speaks_exactly_1000ms",
+  "description": "Non-directed remark at 2000 during model turn [1000,3000]: not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 1000, "end_ms": 3000}], "counterpart_events": [{"kind": "non_directed", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_non_directed": 0.0}},
+
+ {"name": "sel_silent_tic_onset_1999ms_after_event_end",
+  "description": "Model silent. Tic [2000,2500]; substantive onset 4499 is 1999 ms after the event end: inside the 2000 ms window, not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 4499, "end_ms": 5699}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": {"value": 0.0, "count": 1, "sufficient": false}}},
+
+ {"name": "sel_silent_tic_onset_exactly_2000ms_after_event_end",
+  "description": "Onset 4500 = event end 2500 + 2000. AMBIGUOUS boundary: 'through 2000 ms after its end' read as inclusive, so the onset is inside the window and the tic is not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 4500, "end_ms": 5700}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": 0.0}},
+
+ {"name": "sel_silent_tic_onset_2001ms_after_event_end",
+  "description": "Onset 4501 is past the window: handled, 1/1.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 4501, "end_ms": 5701}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": 1.0}},
+
+ {"name": "sel_silent_tic_onset_during_event",
+  "description": "Tic [2000,2500] while the model is silent; substantive onset 2200 falls inside the event itself, within the window from its start: not handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 2200, "end_ms": 3400}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": 0.0}},
+
+ {"name": "sel_silent_tic_model_spoke_earlier",
+  "description": "Model turn [500,1700] ended before the tic [2000,2500] (silent at the event start) and nothing follows: handled, 1/1.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 500, "end_ms": 1700}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": 1.0}},
+
+ {"name": "sel_silent_tic_model_backchannel_is_ignored",
+  "description": "Tic [2000,2500]; model backchannel [2600,3100] (500 ms) is not a substantive onset: handled.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 2600, "end_ms": 3100}], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}]},
+  "expected": {"selectivity_vocal_tic": 1.0}},
+
+ {"name": "sel_silent_tic_and_non_directed_different_outcomes",
+  "description": "Model silent. Tic [2000,2500] with no onset through 4500: handled. Non-directed [10000,10500] with onset 12500 (end + 2000, inclusive window): not handled. Each kind is scored separately: tic 1.0, non-directed 0.0.",
+  "input": {"duration_ms": 20000, "counterpart": [], "model": [{"start_ms": 12500, "end_ms": 13700}],
+   "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2500}, {"kind": "non_directed", "start_ms": 10000, "end_ms": 10500}]},
+  "expected": {"selectivity_vocal_tic": 1.0, "selectivity_non_directed": 0.0, "selectivity_backchannel": null}},
+
+ {"name": "sel_event_inside_counterpart_turn_model_silent_has_no_rule",
+  "description": "C [1000,5000]; tic [2000,2300] inside the turn while the model is silent. Docs score the silent case only 'outside any counterpart turn', and the model is not speaking: the event is not scored (null, count 0). AMBIGUOUS: docs do not state this explicitly.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 1000, "end_ms": 5000}], "model": [], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_vocal_tic": {"value": null, "count": 0, "sufficient": false}}},
+
+ {"name": "sel_event_inside_counterpart_turn_model_speaking",
+  "description": "C [1000,5000]; model turn [1500,4500] speaks through the turn; backchannel event [2000,2300] inside the turn: 4500-2000 = 2500 > 1000, handled.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 1000, "end_ms": 5000}], "model": [{"start_ms": 1500, "end_ms": 4500}], "counterpart_events": [{"kind": "backchannel", "start_ms": 2000, "end_ms": 2300}]},
+  "expected": {"selectivity_backchannel": 1.0}},
+
+ {"name": "sel_event_outside_counterpart_turn_with_turns_present",
+  "description": "C [0,2000]; tic [4000,4300] outside any turn, model silent throughout: handled, 1/1.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 0, "end_ms": 2000}], "model": [], "counterpart_events": [{"kind": "vocal_tic", "start_ms": 4000, "end_ms": 4300}]},
+  "expected": {"selectivity_vocal_tic": 1.0, "response_rate": 0.0}},
+
+ {"name": "sel_no_events_all_null",
+  "description": "No counterpart events: all three selectivity metrics have a zero denominator and are null with count 0.",
+  "input": {"duration_ms": 20000, "counterpart": [{"start_ms": 0, "end_ms": 2000}], "model": [{"start_ms": 5000, "end_ms": 6200}]},
+  "expected": {"selectivity_backchannel": {"value": null, "count": 0, "sufficient": false}, "selectivity_vocal_tic": null, "selectivity_non_directed": null}}
+]}
