@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "genre",
+    "brief",
+    "hidden_story",
+    "persona",
+    "scripted_moments"
+  ],
+  "properties": {
+    "genre": {
+      "enum": [
+        "product_discovery",
+        "ux_debrief",
+        "ad_feedback",
+        "churn_win_loss",
+        "workplace_research"
+      ]
+    },
+    "brief": {
+      "type": "object",
+      "required": [
+        "full",
+        "compact",
+        "required_topics",
+        "time_budget_s"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "full": {
+          "$ref": "#/$defs/text"
+        },
+        "compact": {
+          "$ref": "#/$defs/text"
+        },
+        "required_topics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "description"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "label": {
+                "$ref": "#/$defs/text"
+              },
+              "description": {
+                "$ref": "#/$defs/text"
+              },
+              "key": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "time_budget_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "hidden_story": {
+      "type": "object",
+      "required": [
+        "facts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "facts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "topic",
+              "tier",
+              "content",
+              "paraphrases",
+              "unlock"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "topic": {
+                "$ref": "#/$defs/identifier"
+              },
+              "tier": {
+                "enum": [
+                  "surface",
+                  "probe",
+                  "deep"
+                ]
+              },
+              "content": {
+                "$ref": "#/$defs/text"
+              },
+              "weight": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "paraphrases": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "$ref": "#/$defs/text"
+                }
+              },
+              "unlock": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "contradictions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "first",
+              "second"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/identifier"
+              },
+              "first": {
+                "$ref": "#/$defs/text"
+              },
+              "second": {
+                "$ref": "#/$defs/text"
+              }
+            }
+          }
+        }
+      }
+    },
+    "persona": {
+      "type": "object",
+      "required": [
+        "id",
+        "traits",
+        "voice_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "traits": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "talkative",
+              "terse",
+              "guarded",
+              "rambling",
+              "emotional",
+              "mid_thought_pauser"
+            ]
+          }
+        },
+        "voice_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "response_delay_ms": {
+          "type": "object",
+          "required": [
+            "mean",
+            "sd"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "mean": {
+              "type": "number",
+              "minimum": 0
+            },
+            "sd": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "patience": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "interruptiveness": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "silence_tolerance_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "yield_when_interrupted_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "yield_when_interrupting_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turn_decider_model": {
+          "$ref": "#/$defs/text"
+        }
+      }
+    },
+    "scripted_moments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "trigger",
+          "success",
+          "severity"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/identifier"
+          },
+          "type": {
+            "enum": [
+              "mid_thought_pause",
+              "tangent",
+              "contradiction",
+              "emotional_disclosure"
+            ]
+          },
+          "trigger": {
+            "type": "object"
+          },
+          "script": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/text"
+              },
+              {
+                "type": "object"
+              }
+            ]
+          },
+          "success": {
+            "type": "object"
+          },
+          "severity": {
+            "enum": [
+              "soft",
+              "hard"
+            ]
+          },
+          "memory_distance": {
+            "enum": [
+              "near",
+              "far"
+            ]
+          }
+        }
+      }
+    },
+    "pass": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "insight_recall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "deep_recall": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "id": true,
+    "version": true,
+    "split": true
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(?![\\s\\S])"
+    },
+    "text": {
+      "type": "string",
+      "pattern": "\\S"
+    }
+  },
+  "unevaluatedProperties": false
+}

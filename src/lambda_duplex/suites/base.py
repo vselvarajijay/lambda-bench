@@ -14,7 +14,22 @@ from lambda_duplex.trajectory.seeds import random_stream
 
 CheckKind = Literal["deterministic", "classified", "judge"]
 Split = Literal["dev", "test"]
-NON_SECRET_KEYS = frozenset({"id", "topic", "tier", "type", "unlock", "trigger"})
+NON_SECRET_KEYS = frozenset(
+    {
+        "id",
+        "topic",
+        "tier",
+        "type",
+        "unlock",
+        "trigger",
+        "severity",
+        "memory_distance",
+        "success",
+        "traits",
+        "voice_id",
+        "turn_decider_model",
+    }
+)
 
 
 @dataclass(frozen=True)
