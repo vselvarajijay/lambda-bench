@@ -115,7 +115,11 @@ class DemoSuite:
         return None
 
     def mock_scripts(self, scenario: Scenario) -> Mapping[str, Mapping[int, str]]:
-        return {"good": {1: "What is the code word?"}, "bad": {1: "Nice weather today."}}
+        return {
+            "good": {1: "What is the code word?"},
+            "bad": {1: "Nice weather today."},
+            "known_behavior": {1: "What is the code word?", 12: "Thanks, that helps."},
+        }
 
 
 def create_suite() -> DemoSuite:

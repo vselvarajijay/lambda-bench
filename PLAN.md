@@ -865,9 +865,9 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.9: Audio end-to-end known-answer run `[gate]`
 
-- [ ] Mock model script containing known overlaps, pauses, yields and latencies.
-- [ ] CI smoke test with synthetic audio.
-- **Run:** `uv run lambda-duplex run --suite demo --model mock:known_behavior --condition realistic --out runs/e2e && uv run lambda-duplex report runs/e2e`
+- [x] Mock model script containing known overlaps, pauses, yields and latencies.
+- [x] CI smoke test with synthetic audio.
+- **Run:** `uv run lambda-duplex run --suite demo --model mock:known_behavior --mode audio --audio-backend synthetic --condition realistic --out runs/e2e && uv run lambda-duplex report runs/e2e`
 - **Test:** `pytest tests/e2e/test_audio_known_answers.py`
 - **Done when:** all core metrics recover the known values, and noise does not change the counterpart timeline.
 
