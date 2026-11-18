@@ -145,6 +145,7 @@ def write_run(
     tracks: AudioTracks | None = None,
     effects: Mapping[str, Any] | None = None,
     condition: Mapping[str, Any] | None = None,
+    transcript: Mapping[str, Any] | None = None,
 ) -> Path:
     """Write a complete run directory, or leave no destination behind."""
     if path.exists():
@@ -179,6 +180,8 @@ def write_run(
         manifest["effects"] = dict(effects)
     if condition is not None:
         manifest["condition"] = dict(condition)
+    if transcript is not None:
+        manifest["transcript"] = dict(transcript)
     try:
         if tracks is not None:
             manifest["audio"] = {"backend": spec.audio_backend, **tracks.write(temporary / "audio")}

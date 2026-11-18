@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+import asyncio
 import copy
 import json
 import math
@@ -19,6 +20,7 @@ from lambda_duplex.audio.pcm import INTERNAL_SAMPLE_RATE, PlayoutBuffer, sample_
 from lambda_duplex.counterpart.turn_taking import (
     INJECTED_TAG,
     INTERRUPT_TEXT,
+    MODEL_TURN_GAP_MS,
     OVERLAY_TEXT,
     PROMPT_TEXT,
     LLMInterruptDecider,
@@ -56,6 +58,9 @@ from lambda_duplex.suites.base import (
 from lambda_duplex.suites.loader import public_scenario
 from lambda_duplex.trajectory.seeds import stream_seed
 
+TRANSCRIPT_CONTEXT_TICKS = 2
+MAX_TRANSCRIPT_UTTERANCE_MS = 15_000
+TRANSCRIPTION_TIMEOUT_S = 120.0
 CALIBRATION_TEXT = "The quick brown fox jumps over the lazy dog near the quiet river."
 
 
@@ -63,6 +68,14 @@ def _stored_data(data: Any) -> dict[str, Any]:
     """Copy event data into the JSON form used by stored trajectories."""
     stored: dict[str, Any] = json.loads(json.dumps(dict(data), allow_nan=False))
     return stored
+
+
+class ModelTranscriber(Protocol):
+    """Turns finished model speech into text during a run."""
+
+    name: str
+
+    async def transcribe(self, pcm: bytes) -> str: ...
 
 
 class AudioEffects(Protocol):
@@ -122,6 +135,7 @@ class PolicyCounterpart:
         speech: SpeechRenderer | None = None,
         effects: AudioEffects | None = None,
         turns: TurnController | None = None,
+        transcriber: ModelTranscriber | None = None,
     ) -> None:
         self._policy = policy
         self._clock = MediaClock(tick_ms)
@@ -130,6 +144,15 @@ class PolicyCounterpart:
         self._turns = turns
         self._overlays: list[_Overlay] = []
         self._speech_gate = SpeechGate() if turns is not None else None
+        self._transcriber = transcriber
+        self._asr_gate = SpeechGate() if transcriber is not None else None
+        self._asr_audio = bytearray()
+        self._asr_preroll: deque[bytes] = deque(maxlen=TRANSCRIPT_CONTEXT_TICKS)
+        self._asr_lead_ticks = 0
+        self._asr_start_tick: int | None = None
+        self._asr_last_speech: int | None = None
+        self._asr_gap_ticks = math.ceil(MODEL_TURN_GAP_MS / tick_ms)
+        self._asr_max_ticks = math.ceil(MAX_TRANSCRIPT_UTTERANCE_MS / tick_ms)
         self._samples_per_tick = self._clock.samples_per_tick(INTERNAL_SAMPLE_RATE)
         self._queue: deque[SpeechSegment] = deque()
         self._events: list[DrainedEvent] = []
@@ -222,12 +245,108 @@ class PolicyCounterpart:
         if self._turns is not None:
             assert self._speech_gate is not None
             self._turns.observe_model(tick, self._speech_gate.update(frame.pcm), frame.text)
-        if not frame.text:
+        if self._transcriber is not None:
+            await self._update_transcript(frame, tick)
             return
-        utterance = ModelUtterance(frame.text, frame.tick)
+        if frame.text:
+            await self._receive_utterance(frame.text, frame.tick)
+
+    async def _receive_utterance(self, text: str, tick: int) -> None:
+        utterance = ModelUtterance(text, tick)
         self._utterances.append(utterance)
         if not self._ending:
             self._accept(await self._policy.on_model_utterance(utterance, self._view()))
+
+    def _add_transcript_audio(self, frame: MediaFrame) -> None:
+        assert self._asr_gate is not None
+        speaking = self._asr_gate.update(frame.pcm)
+        if self._asr_start_tick is None:
+            if not speaking:
+                self._asr_preroll.append(frame.pcm)
+                return
+            self._asr_audio.extend(b"".join(self._asr_preroll))
+            self._asr_lead_ticks = len(self._asr_preroll)
+            self._asr_preroll.clear()
+            self._asr_start_tick = frame.tick
+        self._asr_audio.extend(frame.pcm)
+        if speaking:
+            self._asr_last_speech = frame.tick
+
+    def _transcript_audio(self) -> bytes:
+        assert self._asr_start_tick is not None and self._asr_last_speech is not None
+        speech_ticks = self._asr_last_speech - self._asr_start_tick + 1
+        ticks = self._asr_lead_ticks + speech_ticks + TRANSCRIPT_CONTEXT_TICKS
+        return bytes(self._asr_audio[: ticks * self._samples_per_tick * 2])
+
+    async def _transcribe_audio(self, audio: bytes) -> str:
+        assert self._transcriber is not None
+        text = await asyncio.wait_for(self._transcriber.transcribe(audio), TRANSCRIPTION_TIMEOUT_S)
+        return text.strip()
+
+    async def _flush_transcript(self, deliver: bool, keep_context: bool = True) -> None:
+        assert self._transcriber is not None
+        assert self._asr_start_tick is not None and self._asr_last_speech is not None
+        audio = self._transcript_audio()
+        start_tick, end_tick = self._asr_start_tick, self._asr_last_speech
+        tail_ticks = len(self._asr_audio) // (self._samples_per_tick * 2)
+        tail = bytes(self._asr_audio[(tail_ticks - 2) * self._samples_per_tick * 2 :])
+        self._asr_audio.clear()
+        self._asr_preroll.clear()
+        for index in range(0, len(tail) if keep_context else 0, self._samples_per_tick * 2):
+            self._asr_preroll.append(tail[index : index + self._samples_per_tick * 2])
+        self._asr_start_tick = None
+        self._asr_last_speech = None
+        text = await self._transcribe_audio(audio)
+        self._core_event(
+            "model_transcript",
+            text=text,
+            start_tick=start_tick,
+            end_tick=end_tick,
+            source=self._transcriber.name,
+        )
+        if self._turns is not None and text:
+            self._turns.latest_model_text = text
+        if deliver and text:
+            await self._receive_utterance(text, end_tick)
+
+    async def _update_decision_text(self, tick: int) -> None:
+        if self._turns is None or self._asr_start_tick is None:
+            return
+        if not self._turns.needs_decision_text(tick):
+            return
+        assert self._transcriber is not None and self._asr_last_speech is not None
+        text = await self._transcribe_audio(self._transcript_audio())
+        self._core_event(
+            "model_transcript_partial",
+            text=text,
+            start_tick=self._asr_start_tick,
+            end_tick=self._asr_last_speech,
+            source=self._transcriber.name,
+        )
+        self._turns.latest_model_text = text
+
+    async def _update_transcript(self, frame: MediaFrame, tick: int) -> None:
+        self._add_transcript_audio(frame)
+        if self._asr_start_tick is None or self._asr_last_speech is None:
+            return
+        silence_ticks = frame.tick - self._asr_last_speech
+        open_ticks = frame.tick - self._asr_start_tick + 1
+        if silence_ticks >= self._asr_gap_ticks:
+            await self._flush_transcript(deliver=True)
+        elif open_ticks >= self._asr_max_ticks:
+            await self._flush_transcript(deliver=True, keep_context=False)
+        else:
+            await self._update_decision_text(tick)
+
+    async def finish(self, pending: MediaFrame | None, tick: int) -> None:
+        """Finish transcribing model speech when the conversation ends."""
+        self._clock.tick = tick
+        if self._transcriber is None:
+            return
+        if pending is not None:
+            self._add_transcript_audio(pending)
+        if self._asr_start_tick is not None and self._asr_last_speech is not None:
+            await self._flush_transcript(deliver=False)
 
     def _core_event(self, name: str, **data: Any) -> None:
         self._events.append((name, "core", _stored_data(data)))
@@ -365,6 +484,7 @@ async def run_scenario(
     llm: LLMGateway | None = None,
     speech: SpeechRenderer | None = None,
     noise_dir: Path | None = None,
+    transcriber: ModelTranscriber | None = None,
 ) -> ScenarioRun:
     """Run and score one scenario."""
     selected = condition or ("clean" if speech is None else suite.manifest.default_condition)
@@ -372,7 +492,14 @@ async def run_scenario(
         raise ValueError("text mode supports only the clean condition")
     context = RunContext(seed, selected, llm=llm or LLMGateway())
     rate = None if speech is None else INTERNAL_SAMPLE_RATE
-    config = OrchestratorConfig(max_ticks=max_ticks, seed=seed, audio_sample_rate=rate)
+    if transcriber is not None and speech is None:
+        raise ValueError("model transcription requires audio mode")
+    config = OrchestratorConfig(
+        max_ticks=max_ticks,
+        seed=seed,
+        audio_sample_rate=rate,
+        trust_model_text=transcriber is None,
+    )
     policy = suite.create_policy(copy.deepcopy(scenario), context)
     tracks: TrackStore | None = None
     effects: AudioEffects | None = None
@@ -413,7 +540,7 @@ async def run_scenario(
                 decider = LLMInterruptDecider(context.llm, str(values["turn_decider_model"]), note)
             turn_seed = stream_seed(seed, f"turns:{scenario.id}")
             turns = TurnController(persona, turn_seed, config.tick_ms, decider)
-    counterpart = PolicyCounterpart(policy, config.tick_ms, speech, effects, turns)
+    counterpart = PolicyCounterpart(policy, config.tick_ms, speech, effects, turns, transcriber)
     model_context = suite.model_context(public_scenario(scenario), adapter.capabilities)
     outcome = await Orchestrator(adapter, counterpart, config, model_context, tracks).run()
     trajectory = Trajectory(

@@ -387,6 +387,9 @@ def test_short_clean_audio_is_a_counterpart_error() -> None:
         def drain_events(self) -> list[tuple[str, str, dict[str, object]]]:
             return []
 
+        async def finish(self, pending: MediaFrame | None, tick: int) -> None:
+            return None
+
         async def stop(self) -> None:
             return None
 

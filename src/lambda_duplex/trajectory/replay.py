@@ -154,6 +154,26 @@ async def verify_run(
         problems.extend(track_problems)
         model = RecordedModel(stored, stored_tracks["model"], samples)
         speech = SyntheticSpeech(settings["seed"])
+    transcriber = None
+    transcript = stored.manifest.get("transcript") or {"mode": "injected"}
+    if transcript["mode"] != "injected":
+        from lambda_duplex.audio.transcription import ScriptedTranscriber
+
+        recorded = [
+            event.data["text"]
+            for event in stored.trajectory.events
+            if event.source == "counterpart"
+            and event.type in {"model_transcript", "model_transcript_partial"}
+        ]
+        failure = next(
+            (
+                str(event.data["error"])
+                for event in stored.trajectory.events
+                if event.source == "orchestrator" and event.type == "failed"
+            ),
+            None,
+        )
+        transcriber = ScriptedTranscriber(recorded, transcript["model"], failure)
     condition_details = stored.manifest.get("condition") or {}
     requested_turns = condition_details.get("requested", {}).get("turn_taking")
     applied_turns = condition_details.get("applied", {}).get("turn_taking")
@@ -175,6 +195,7 @@ async def verify_run(
             llm=LLMGateway(mode, entries=stored.llm_entries),
             speech=speech,
             noise_dir=noise_dir if uses_recording else None,
+            transcriber=transcriber,
         )
     except NoiseAssetError as error:
         raise TrajectoryError(str(error)) from error
