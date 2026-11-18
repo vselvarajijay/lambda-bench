@@ -3,6 +3,8 @@
 from lambda_duplex.orchestrator.clock import DEFAULT_TICK_MS, MediaClock
 from lambda_duplex.orchestrator.engine import (
     Counterpart,
+    DrainedEvent,
+    EndedBy,
     Event,
     Orchestrator,
     OrchestratorConfig,
@@ -12,6 +14,8 @@ from lambda_duplex.orchestrator.engine import (
 __all__ = [
     "DEFAULT_TICK_MS",
     "Counterpart",
+    "DrainedEvent",
+    "EndedBy",
     "Event",
     "MediaClock",
     "Orchestrator",

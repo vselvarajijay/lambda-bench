@@ -74,4 +74,15 @@ def test_inline_run_is_repeatable(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_run_rejects_unavailable_combination(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["run", "--suite", "missing", "--model", "mock"]) == 2
-    assert "only --suite" in capsys.readouterr().err
+    assert "unknown suite" in capsys.readouterr().err
+
+
+def test_demo_suite_commands(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["suites", "list"]) == 0
+    assert "demo" in capsys.readouterr().out.split()
+    assert cli.main(["suites", "validate", "demo"]) == 0
+    assert "validated 1 scenarios, 0 issues" in capsys.readouterr().out
+    assert cli.main(["run", "--suite", "demo", "--model", "mock", "--mode", "text"]) == 0
+    assert "passed=true" in capsys.readouterr().out
+    assert cli.main(["run", "--suite", "demo", "--model", "mock:bad", "--mode", "text"]) == 0
+    assert "passed=false" in capsys.readouterr().out

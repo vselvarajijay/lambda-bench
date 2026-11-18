@@ -232,7 +232,7 @@ class Check(Protocol):
 | Checks | Final database state equals expected state (deterministic) |
 | Pass | Exact final state and no policy violation |
 | Talk target | 0.35 to 0.60 |
-| Stress on the interface | Adds a tool channel, through an optional `ToolProvider` on `ModelContext`, gated by a `tools` capability |
+| Stress on the interface | Adds tool declarations on `ModelContext`, gated by a `tools` capability. Tool execution stays in an optional suite protocol that never reaches the adapter |
 
 ### 6.2 Sketch: `tutoring` (model should talk more)
 
@@ -752,9 +752,9 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 1.3: Suite interface and demo suite `[gate]`
 
-- [ ] `Suite`, `CounterpartPolicy`, `Check`, schema merge, discovery.
-- [ ] `suites/demo`: the counterpart reveals a code word when asked.
-- [ ] Support and tutoring stubs in `tests/fixtures/suites`.
+- [x] `Suite`, `CounterpartPolicy`, `Check`, schema merge, discovery.
+- [x] `suites/demo`: the counterpart reveals a code word when asked.
+- [x] Support and tutoring stubs in `tests/fixtures/suites`.
 - **Run:** `uv run lambda-duplex suites validate demo && uv run lambda-duplex run --suite demo --model mock --mode text`
 - **Test:** `pytest tests/suites` runs all three suites through the same contract.
 - **Done when:** demo passes, its failing mock fails, both stubs load, and `architect` signs off.

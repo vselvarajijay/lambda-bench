@@ -1,0 +1,5 @@
+id: code_word_001
+version: 1
+split: dev
+brief: Find out the secret word the other speaker knows.
+code_word: lantern

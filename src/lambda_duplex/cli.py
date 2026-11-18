@@ -13,10 +13,19 @@ from dataclasses import asdict, dataclass
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter
-from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig
+from lambda_duplex.orchestrator import Orchestrator, OrchestratorConfig, RunOutcome
 from lambda_duplex.orchestrator.scripted import ScriptedCounterpart
+from lambda_duplex.suites.loader import (
+    SuiteError,
+    list_suites,
+    load_scenario_files,
+    load_suite,
+    valid_scenarios,
+)
+from lambda_duplex.suites.runtime import mock_for, run_scenario
 
 MINIMUM_PYTHON = (3, 12)
+DEFAULT_SUITE_TICKS = 3000
 OPTIONAL_MODULES = {
     "silero_vad": "speech activity timelines",
     "faster_whisper": "model audio transcription",
@@ -74,23 +83,87 @@ def _doctor(as_json: bool) -> int:
     return 0 if healthy else 1
 
 
-def _run(args: argparse.Namespace) -> int:
-    if args.suite != "_inline_echo" or args.model != "mock" or args.mode != "text":
-        print("only --suite _inline_echo --model mock --mode text is available", file=sys.stderr)
-        return 2
-    if args.ticks < 0:
-        print("--ticks must not be negative", file=sys.stderr)
-        return 2
-    script = {tick: f"line {tick // 10}" for tick in range(0, args.ticks, 10)}
-    orchestrator = Orchestrator(
-        MockAdapter(),
-        ScriptedCounterpart(script),
-        OrchestratorConfig(max_ticks=args.ticks, seed=args.seed),
-    )
-    outcome = asyncio.run(orchestrator.run())
+def _print_events(outcome: RunOutcome) -> None:
     for event in outcome.events:
         details = json.dumps(event.data, sort_keys=True)
         print(f"{event.seq:04} tick={event.tick:<4} {event.source}.{event.type} {details}")
+
+
+def _run_suite(args: argparse.Namespace) -> int:
+    model, _, behavior = args.model.partition(":")
+    if model != "mock" or args.mode != "text":
+        print("only mock models in text mode are available", file=sys.stderr)
+        return 2
+    try:
+        loaded = load_suite(args.suite)
+        scenarios = valid_scenarios(loaded, args.split)
+    except SuiteError as error:
+        print(error, file=sys.stderr)
+        return 2
+    if args.scenario:
+        scenarios = [scenario for scenario in scenarios if scenario.id == args.scenario]
+    if not scenarios:
+        print("no matching scenarios", file=sys.stderr)
+        return 2
+    exit_code = 0
+    suite_ticks = DEFAULT_SUITE_TICKS if args.ticks is None else args.ticks
+    for scenario in scenarios:
+        try:
+            adapter = mock_for(loaded.suite, scenario, behavior or "good")
+        except ValueError as error:
+            print(error, file=sys.stderr)
+            return 2
+        run = asyncio.run(
+            run_scenario(loaded.suite, scenario, adapter, seed=args.seed, max_ticks=suite_ticks)
+        )
+        _print_events(run.outcome)
+        passed = str(run.decision.passed).lower()
+        print(
+            f"scenario={scenario.id} status={run.outcome.status} "
+            f"ended_by={run.outcome.ended_by} passed={passed}"
+        )
+        if run.outcome.status != "completed":
+            exit_code = 1
+    return exit_code
+
+
+def _suites(args: argparse.Namespace) -> int:
+    if args.suites_command == "list":
+        for name in list_suites():
+            print(name)
+        return 0
+    try:
+        files = load_scenario_files(load_suite(args.suite), args.split)
+    except SuiteError as error:
+        print(error, file=sys.stderr)
+        return 2
+    invalid = 0
+    for item in files:
+        for issue in item.issues:
+            invalid += 1
+            print(f"{item.path}: {issue.path}: {issue.message}")
+    print(f"validated {len(files)} scenarios, {invalid} issues")
+    return 1 if invalid else 0
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.ticks is not None and args.ticks < 0:
+        print("--ticks must not be negative", file=sys.stderr)
+        return 2
+    if args.suite != "_inline_echo":
+        return _run_suite(args)
+    if args.model != "mock" or args.mode != "text":
+        print("_inline_echo supports only the mock model in text mode", file=sys.stderr)
+        return 2
+    ticks = 50 if args.ticks is None else args.ticks
+    script = {tick: f"line {tick // 10}" for tick in range(0, ticks, 10)}
+    orchestrator = Orchestrator(
+        MockAdapter(),
+        ScriptedCounterpart(script),
+        OrchestratorConfig(max_ticks=ticks, seed=args.seed),
+    )
+    outcome = asyncio.run(orchestrator.run())
+    _print_events(outcome)
     print(f"status={outcome.status} ticks={outcome.ticks}")
     return 0 if outcome.status == "completed" else 1
 
@@ -106,8 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--suite", required=True)
     run.add_argument("--model", required=True)
     run.add_argument("--mode", choices=("text", "audio"), default="text")
-    run.add_argument("--ticks", type=int, default=50)
+    run.add_argument("--ticks", type=int)
     run.add_argument("--seed", type=int, default=0)
+    run.add_argument("--split", choices=("dev", "test"), default="dev")
+    run.add_argument("--scenario")
+    suites = commands.add_parser("suites", help="list or validate suites")
+    suite_commands = suites.add_subparsers(dest="suites_command", required=True)
+    suite_commands.add_parser("list", help="list available suites")
+    validate = suite_commands.add_parser("validate", help="validate suite scenarios")
+    validate.add_argument("suite")
+    validate.add_argument("--split", choices=("dev", "test"), default="dev")
     return parser
 
 
@@ -119,5 +200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "suites":
+        return _suites(args)
     parser.print_help()
     return 0
