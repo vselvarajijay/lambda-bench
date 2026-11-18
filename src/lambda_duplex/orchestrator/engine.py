@@ -16,6 +16,8 @@ from lambda_duplex.adapters.base import (
 from lambda_duplex.orchestrator.clock import DEFAULT_TICK_MS, MediaClock
 
 RunStatus = Literal["completed", "adapter_error", "adapter_timeout", "counterpart_error"]
+EndedBy = Literal["counterpart", "tick_limit", "error"]
+DrainedEvent = tuple[str, str, dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class Event:
     source: str
     type: str
     data: dict[str, Any] = field(default_factory=dict)
+    origin: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -52,6 +55,7 @@ class RunOutcome:
     ticks: int
     events: tuple[Event, ...]
     error: str | None = None
+    ended_by: EndedBy = "counterpart"
 
 
 class Counterpart(Protocol):
@@ -64,6 +68,8 @@ class Counterpart(Protocol):
     async def render(self, tick: int) -> MediaFrame: ...
 
     def is_finished(self) -> bool: ...
+
+    def drain_events(self) -> list[DrainedEvent]: ...
 
     async def stop(self) -> None: ...
 
@@ -95,7 +101,9 @@ class Orchestrator:
         self._clock = MediaClock(config.tick_ms)
         self._events: list[Event] = []
 
-    def _emit(self, source: str, event_type: str, **data: Any) -> None:
+    def _append(
+        self, source: str, event_type: str, data: dict[str, Any], origin: str | None = None
+    ) -> None:
         self._events.append(
             Event(
                 seq=len(self._events),
@@ -104,28 +112,43 @@ class Orchestrator:
                 source=source,
                 type=event_type,
                 data=data,
+                origin=origin,
             )
         )
 
-    async def _exchange(self) -> None:
+    def _emit(self, source: str, event_type: str, /, **data: Any) -> None:
+        self._append(source, event_type, data)
+
+    def _drain_suite_events(self) -> None:
+        for event_type, origin, data in self._counterpart.drain_events():
+            self._append("suite", event_type, data, origin)
+
+    async def _counterpart_turn(self, pending: MediaFrame | None, tick: int) -> MediaFrame | None:
+        """Deliver model output, then return counterpart media unless it has finished."""
+        try:
+            if pending is not None:
+                await self._counterpart.hear(pending, tick)
+                if pending.text:
+                    self._emit("counterpart", "heard", text=pending.text, from_tick=pending.tick)
+            self._drain_suite_events()
+            if self._counterpart.is_finished():
+                self._emit("counterpart", "finished")
+                return None
+            incoming = await self._counterpart.render(tick)
+            if incoming.text:
+                self._emit("counterpart", "spoke", text=incoming.text)
+            self._drain_suite_events()
+            return incoming
+        except Exception as error:
+            raise _CounterpartFailure(str(error) or type(error).__name__) from error
+
+    async def _exchange(self) -> EndedBy:
         pending: MediaFrame | None = None
         while self._clock.tick < self._config.max_ticks:
             tick = self._clock.tick
-            try:
-                if pending is not None:
-                    await self._counterpart.hear(pending, tick)
-                    if pending.text:
-                        self._emit(
-                            "counterpart", "heard", text=pending.text, from_tick=pending.tick
-                        )
-                if self._counterpart.is_finished():
-                    self._emit("counterpart", "finished")
-                    return
-                incoming = await self._counterpart.render(tick)
-            except Exception as error:
-                raise _CounterpartFailure(str(error) or type(error).__name__) from error
-            if incoming.text:
-                self._emit("counterpart", "spoke", text=incoming.text)
+            incoming = await self._counterpart_turn(pending, tick)
+            if incoming is None:
+                return "counterpart"
             result = await asyncio.wait_for(
                 self._adapter.step(incoming, tick), self._config.step_timeout_s
             )
@@ -135,6 +158,7 @@ class Orchestrator:
                 self._emit("model", "spoke", text=result.output.text)
             pending = result.output
             self._clock.advance()
+        return "tick_limit"
 
     async def _stop_participants(self, model_started: bool, counterpart_started: bool) -> None:
         if model_started:
@@ -153,6 +177,7 @@ class Orchestrator:
     async def run(self) -> RunOutcome:
         """Run the conversation and always attempt to stop started participants."""
         status: RunStatus = "completed"
+        ended_by: EndedBy = "error"
         error: str | None = None
         model_started = False
         counterpart_started = False
@@ -170,7 +195,7 @@ class Orchestrator:
             )
             model_started = True
             self._emit("model", "started", session_id=info.session_id)
-            await self._exchange()
+            ended_by = await self._exchange()
         except _CounterpartFailure as failure:
             status, error = "counterpart_error", str(failure)
         except TimeoutError:
@@ -180,5 +205,5 @@ class Orchestrator:
         if error is not None:
             self._emit("orchestrator", "failed", status=status, error=error)
         await self._stop_participants(model_started, counterpart_started)
-        self._emit("orchestrator", "ended", status=status)
-        return RunOutcome(status, self._clock.tick, tuple(self._events), error)
+        self._emit("orchestrator", "ended", status=status, ended_by=ended_by)
+        return RunOutcome(status, self._clock.tick, tuple(self._events), error, ended_by)

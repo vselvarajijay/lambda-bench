@@ -53,11 +53,21 @@ class ModelIdentity:
 
 
 @dataclass(frozen=True)
+class ToolSpec:
+    """Tool a suite offers to models that declare tool support."""
+
+    name: str
+    description: str
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ModelContext:
     """Information the model may see. It must never contain hidden suite state."""
 
     full: str = ""
     compact: str = ""
+    tools: tuple[ToolSpec, ...] = ()
 
 
 @dataclass(frozen=True)

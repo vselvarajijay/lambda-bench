@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any
 
 from lambda_duplex.adapters.base import MediaFrame
 
@@ -29,6 +30,9 @@ class ScriptedCounterpart:
 
     def is_finished(self) -> bool:
         return self._finish_after is not None and self._last_tick >= self._finish_after
+
+    def drain_events(self) -> list[tuple[str, str, dict[str, Any]]]:
+        return []
 
     async def stop(self) -> None:
         return None

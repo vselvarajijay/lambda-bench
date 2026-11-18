@@ -129,7 +129,8 @@ def test_adapter_failures_stop_cleanly(mode: str, status: str) -> None:
     assert outcome.ticks == 1
     assert adapter.stopped
     assert outcome.events[-1].type == "ended"
-    assert outcome.events[-1].data == {"status": status}
+    assert outcome.events[-1].data == {"status": status, "ended_by": "error"}
+    assert outcome.ended_by == "error"
 
 
 def test_counterpart_failure_is_not_blamed_on_model() -> None:

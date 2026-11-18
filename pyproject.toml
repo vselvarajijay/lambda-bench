@@ -9,13 +9,22 @@ description = "A framework for benchmarking how full-duplex voice models convers
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "jsonschema>=4.23",
+    "pyyaml>=6",
+]
 
 [project.scripts]
 lambda-duplex = "lambda_duplex.cli:main"
 
 [dependency-groups]
-dev = ["mypy>=1.13", "pytest>=8.3", "ruff>=0.8"]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-pyyaml>=6.0.12.20261113",
+]
 
 [tool.hatch.version]
 path = "src/lambda_duplex/__init__.py"
@@ -30,13 +39,15 @@ testpaths = ["tests"]
 [tool.ruff]
 extend-exclude = ["*.md"]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "."]
 target-version = "py312"
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "RUF", "UP"]
 
 [tool.mypy]
-files = ["src", "tests"]
+files = ["src", "tests", "suites"]
+mypy_path = "src:."
+explicit_package_bases = true
 python_version = "3.12"
 strict = true
