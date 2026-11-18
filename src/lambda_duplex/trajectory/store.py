@@ -255,7 +255,7 @@ def _holds_run(path: Path) -> bool:
 
 def find_run_dirs(path: Path) -> list[Path]:
     """Return a run directory, or the complete runs directly inside a directory."""
-    if (path / "manifest.json").is_file():
+    if _holds_run(path):
         return [path]
     if not path.is_dir():
         return []

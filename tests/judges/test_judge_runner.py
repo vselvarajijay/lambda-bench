@@ -1042,3 +1042,67 @@ def test_cli_reports_an_unreadable_run_and_judges_the_rest(tmp_path: Path) -> No
 
     assert code == 2
     assert len(load_judgments(second)) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+@pytest.mark.parametrize("mode", [0, 0o444])
+def test_cli_reports_an_unreadable_named_path(tmp_path: Path, mode: int) -> None:
+    run = demo_run(tmp_path / "runs")
+    run.chmod(mode)
+    try:
+        code = cli.main(["judge", str(run), "--rubric", "question_quality", "--provider", "fake"])
+    finally:
+        run.chmod(0o755)
+
+    assert code == 2
+
+
+def test_rubric_item_text_is_checked_for_identity(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    leaking = {
+        "id": RUBRIC.id,
+        "version": "leak",
+        "instructions": "Score the speaker.",
+        "items": [{"id": "a", "prompt": "Is this mock?", "scale": {"min": 1, "max": 2}}],
+    }
+    provider = FakeProvider(fake_judge_response)
+
+    outcome = judge(run, JudgeConfig(parse_rubric(leaking), "fake", provider, "fake-judge"))
+
+    assert provider.calls == 0
+    assert "identity term" in outcome.record["errors"][0]
+
+
+@pytest.mark.parametrize(
+    ("items", "params"),
+    [
+        ([{"nested": {"prompt": "mock"}}], {}),
+        ([{"anchors": ["mock"]}], {}),
+        ([], {"hint": "mock"}),
+    ],
+)
+def test_nested_request_values_are_checked_for_identity(
+    tmp_path: Path, items: list[dict[str, Any]], params: dict[str, Any]
+) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    body = json.dumps({"items": items, "transcript": []})
+    messages = ({"role": "system", "content": ""}, {"role": "user", "content": body})
+
+    with pytest.raises(BlindingError, match="identity term"):
+        assert_blinded(LLMRequest("j", messages, "p", params), ("mock",), run)
+
+
+@pytest.mark.parametrize(
+    ("reference", "spoken"),
+    [
+        ("acme/secretmodel/", "secretmodel"),
+        ("acme/secretmodel:v2", "acme/secretmodel"),
+        ("acme/secretmodel:v2", "v2"),
+        ("acme/secretmodel@sha-1", "sha-1"),
+    ],
+)
+def test_reference_forms_are_hidden(tmp_path: Path, reference: str, spoken: str) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    run.manifest["model"]["reference"] = reference
+
+    assert redact(f"I am {spoken} now", identity_terms(run))[0] == "I am [REDACTED] now"
