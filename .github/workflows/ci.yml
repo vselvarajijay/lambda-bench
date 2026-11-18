@@ -23,6 +23,8 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
       - run: uv run python scripts/check_agents.py
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run pytest -m browser tests/viewer
       - run: uv run lambda-duplex doctor
       - run: uv run lambda-duplex adapter-check mock
       - name: Scaffold and run a new suite

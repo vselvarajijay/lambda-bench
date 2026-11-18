@@ -255,6 +255,22 @@ def _run_suite(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _view(args: argparse.Namespace) -> int:
+    from lambda_duplex.viewer.build import ViewerError, build_viewer
+
+    paths = find_run_dirs(args.path)
+    if len(paths) != 1:
+        print("view requires exactly one run", file=sys.stderr)
+        return 2
+    try:
+        page = build_viewer(paths[0], args.out)
+    except (ImportError, OSError, TrajectoryError, ViewerError, ValueError) as error:
+        print(f"cannot build viewer: {error}", file=sys.stderr)
+        return 2
+    print(page)
+    return 0
+
+
 def _adapter_check(args: argparse.Namespace) -> int:
     if args.model != "mock":
         print(f"unknown adapter: {args.model}", file=sys.stderr)
@@ -598,6 +614,9 @@ def build_parser() -> argparse.ArgumentParser:
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
+    view = commands.add_parser("view", help="build a static replay page")
+    view.add_argument("path", type=Path)
+    view.add_argument("--out", type=Path, required=True)
     adapter_check = commands.add_parser("adapter-check", help="check a model adapter")
     adapter_check.add_argument("model")
     adapter_check.add_argument("--json", action="store_true")
@@ -645,6 +664,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _transcribe(args)
     if args.command == "timeline":
         return _timeline(args)
+    if args.command == "view":
+        return _view(args)
     if args.command == "adapter-check":
         return _adapter_check(args)
     if args.command == "interviewer":
