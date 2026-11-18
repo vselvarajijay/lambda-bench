@@ -10,6 +10,7 @@ import platform
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter
@@ -23,6 +24,8 @@ from lambda_duplex.suites.loader import (
     valid_scenarios,
 )
 from lambda_duplex.suites.runtime import mock_for, run_scenario
+from lambda_duplex.trajectory.replay import verify_run
+from lambda_duplex.trajectory.store import RunSpec, TrajectoryError, find_run_dirs, write_run
 
 MINIMUM_PYTHON = (3, 12)
 DEFAULT_SUITE_TICKS = 3000
@@ -89,6 +92,11 @@ def _print_events(outcome: RunOutcome) -> None:
         print(f"{event.seq:04} tick={event.tick:<4} {event.source}.{event.type} {details}")
 
 
+def _stored_suite_reference(reference: str, name: str) -> str:
+    """Avoid storing absolute local paths in shareable manifests."""
+    return name if Path(reference).is_absolute() else reference
+
+
 def _run_suite(args: argparse.Namespace) -> int:
     model, _, behavior = args.model.partition(":")
     if model != "mock" or args.mode != "text":
@@ -116,6 +124,29 @@ def _run_suite(args: argparse.Namespace) -> int:
         run = asyncio.run(
             run_scenario(loaded.suite, scenario, adapter, seed=args.seed, max_ticks=suite_ticks)
         )
+        if args.out is not None:
+            spec = RunSpec(
+                _stored_suite_reference(args.suite, loaded.suite.manifest.name),
+                args.model,
+                args.mode,
+                args.seed,
+                suite_ticks,
+                run.trajectory.tick_ms,
+                loaded.suite.manifest.default_condition,
+            )
+            try:
+                write_run(
+                    args.out / f"{scenario.id}__seed{args.seed}",
+                    loaded.suite,
+                    spec,
+                    adapter.describe(),
+                    run.trajectory,
+                    run.result,
+                    run.decision,
+                )
+            except TrajectoryError as error:
+                print(error, file=sys.stderr)
+                return 2
         _print_events(run.outcome)
         passed = str(run.decision.passed).lower()
         print(
@@ -125,6 +156,28 @@ def _run_suite(args: argparse.Namespace) -> int:
         if run.outcome.status != "completed":
             exit_code = 1
     return exit_code
+
+
+def _replay(args: argparse.Namespace) -> int:
+    paths = find_run_dirs(args.path)
+    if not paths:
+        print(f"no runs found in {args.path}", file=sys.stderr)
+        return 2
+    suite = load_suite(args.suite).suite if args.suite else None
+    healthy = True
+    for path in paths:
+        try:
+            report = asyncio.run(verify_run(path, suite))
+        except (SuiteError, TrajectoryError) as error:
+            print(f"{path}: {error}", file=sys.stderr)
+            return 2
+        healthy = healthy and report.ok
+        rescore = "ok" if report.rescore_ok else "FAILED"
+        replay = "ok" if report.replay_ok else "FAILED"
+        print(f"{path}: rescore={rescore} replay={replay}")
+        for problem in report.problems:
+            print(f"  {problem}")
+    return 0 if healthy else 1
 
 
 def _suites(args: argparse.Namespace) -> int:
@@ -183,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--split", choices=("dev", "test"), default="dev")
     run.add_argument("--scenario")
+    run.add_argument("--out", type=Path, help="directory for stored run data")
+    replay = commands.add_parser("replay", help="verify stored runs")
+    replay.add_argument("path", type=Path)
+    replay.add_argument("--verify", action="store_true", help="rescore and replay the run")
+    replay.add_argument("--suite", help="suite to use instead of the stored reference")
     suites = commands.add_parser("suites", help="list or validate suites")
     suite_commands = suites.add_subparsers(dest="suites_command", required=True)
     suite_commands.add_parser("list", help="list available suites")
@@ -200,6 +258,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.json)
     if args.command == "run":
         return _run(args)
+    if args.command == "replay":
+        if not args.verify:
+            parser.error("replay currently requires --verify")
+        return _replay(args)
     if args.command == "suites":
         return _suites(args)
     parser.print_help()

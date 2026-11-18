@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from lambda_duplex.adapters.base import Capabilities, ModelContext
+from lambda_duplex.llm import LLMGateway
 from lambda_duplex.orchestrator.engine import EndedBy, Event, RunStatus
+from lambda_duplex.trajectory.seeds import random_stream
 
 CheckKind = Literal["deterministic", "classified", "judge"]
 Split = Literal["dev", "test"]
@@ -85,6 +88,11 @@ class RunContext:
     seed: int
     condition: str
     persona: str | None = None
+    llm: LLMGateway = field(default_factory=LLMGateway)
+
+    def rng(self, name: str) -> random.Random:
+        """Return the named random stream for this run."""
+        return random_stream(self.seed, name)
 
 
 @dataclass(frozen=True)
