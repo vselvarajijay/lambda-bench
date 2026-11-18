@@ -61,3 +61,9 @@ Model speech comes from the first available source: a transcript of the model au
 ## Cache
 
 A repeated request uses the stored reply, so a second pass makes no new provider call. Its record can differ if the first pass recorded a temporary provider error. Changing the transcript, rubric or judge model changes the request. A new seed changes it only when it produces a different item order. The provider is part of the request key. Replies from a pass that ends `failed` are dropped, so the next pass asks again. `--refresh` also asks the provider again. A failed pass never replaces a stored score for the same transcript: the command reports the failure and keeps the score and its cache.
+
+## Reports
+
+`lambda-duplex report <runs> --format html` adds judge scores in their own section, labeled non-deterministic and uncalibrated. Pass rates and pass^k use only stored pass decisions, so judge files cannot change them. Scored, failed, unscorable, malformed, stale and missing judgments are counted separately, and a run with an unreadable `judges.jsonl` is listed by name. A judgment is stale when the conversation it read has since changed, or when it predates this check. Timing changes and a new text source with the same words do not count. Stale scores are left out until the run is judged again, which uses the cache when the request is unchanged.
+
+`report` does not load suite code on its own, so a results folder cannot choose code to run. Pass `--suite` with a suite you trust to show its composite. The suite's name and version must match the runs. The reported composite is always the sum of each declared weight times the stored part value, computed per run and shown beside every part. The report does not call the suite's `composite()` method, so it is labeled as a weighted sum. A run missing a part is counted as not computed. Otherwise the report says why no composite is shown.

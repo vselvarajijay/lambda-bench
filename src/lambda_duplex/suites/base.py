@@ -93,6 +93,7 @@ class SuiteManifest:
     default_personas: tuple[str, ...]
     talk_ratio_target: tuple[float, float]
     goal_event: str | None = None
+    # Reports show a composite only as the sum of weight times stored check value.
     composite_weights: Mapping[str, float] = field(default_factory=dict)
 
 

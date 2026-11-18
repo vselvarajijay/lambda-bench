@@ -127,6 +127,7 @@ JUDGMENT_SCHEMA: dict[str, Any] = {
             "required": ["seed"],
             "properties": {"seed": {"type": "integer"}},
         },
+        "transcript": {"type": "object"},
         "items": {"type": "array"},
     },
 }
@@ -298,12 +299,14 @@ def _write_lines(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
 
 
 def _read_lines(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
+    if not path.exists():
         return []
+    if not path.is_file():
+        raise JudgeError(f"cannot read {path}: not a regular file")
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         rows = [json.loads(line) for line in lines if line]
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
         raise JudgeError(f"cannot read {path}: {error}") from error
     if not all(isinstance(row, dict) for row in rows):
         raise JudgeError(f"cannot read {path}: every line must be an object")
@@ -350,12 +353,18 @@ def _identity(row: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
+def _same_transcript(stored: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """Compare transcripts, using the blinded hash for records without a fingerprint."""
+    field = "input_sha256" if "input_sha256" in stored else "sha256"
+    return bool(stored.get(field) == current[field])
+
+
 def _has_current_score(run_path: Path, record: Mapping[str, Any]) -> bool:
     """Say whether a scored judgment of this same transcript is already stored."""
     return any(
         _identity(row) == _identity(record)
         and row["status"] == "scored"
-        and row["transcript"].get("sha256") == record["transcript"]["sha256"]
+        and _same_transcript(row["transcript"], record["transcript"])
         for row in load_judgments(run_path)
     )
 
@@ -412,6 +421,7 @@ def _new_record(
         "transcript": {
             "source": transcript.source,
             "sha256": transcript.sha256,
+            "input_sha256": transcript.input_sha256,
             "turns": [asdict(turn) for turn in transcript.turns],
         },
         "attempts": 0,

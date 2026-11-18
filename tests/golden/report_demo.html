@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; style-src &#x27;unsafe-inline&#x27;"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Suite report</title><style>
+:root { color-scheme: light dark; --bg: #fff; --fg: #1c2024; --muted: #5c6670;
+  --line: #d8dde2; --panel: #f5f7f8; --warn: #fff4d6; --warn-fg: #5f4500; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14171a; --fg: #e8ebee;
+  --muted: #a2acb6; --line: #333a41; --panel: #1d2125; --warn: #3a2f12; --warn-fg: #f4dc9c; } }
+body { margin: 0 auto; max-width: 960px; padding: 24px 16px; background: var(--bg);
+  color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+h1 { font-size: 26px; } h2 { margin-top: 40px; font-size: 20px; overflow-wrap: anywhere; }
+h3 { margin-top: 24px; font-size: 16px; }
+.table { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+th { color: var(--muted); font-weight: 600; }
+.note { padding: 8px 12px; background: var(--panel); }
+.warning { padding: 8px 12px; background: var(--warn); color: var(--warn-fg); }
+.empty { color: var(--muted); }
+</style></head>
+<body><h1>Suite report</h1><p class="note">Pass rates come only from stored pass decisions. Intervals resample whole scenarios.</p>
+<section class="group"><h2>demo / mock:good+good+bad / clean</h2><h3>Validity</h3><div class="table"><table><thead><tr><th scope="col">Measure</th><th scope="col">Count</th></tr></thead><tbody>
+<tr><td>Runs</td><td>3</td></tr>
+<tr><td>Valid runs</td><td>3</td></tr>
+<tr><td>Invalid runs</td><td>0</td></tr>
+<tr><td>Run status</td><td>completed: 3</td></tr>
+<tr><td>Ended by</td><td>counterpart: 2, tick_limit: 1</td></tr>
+<tr><td>Checks not computed</td><td>0</td></tr>
+</tbody></table></div><h3>Reliability</h3><div class="table"><table><thead><tr><th scope="col">Measure</th><th scope="col">Estimate [95% interval]</th></tr></thead><tbody>
+<tr><td>Pass rate</td><td>0.667 (1 scenario, no interval)</td></tr>
+<tr><td>pass^1</td><td>0.667 (1 scenario, no interval)</td></tr>
+<tr><td>pass^2</td><td>0.333 (1 scenario, no interval)</td></tr>
+<tr><td>pass^3</td><td>0.000 (1 scenario, no interval)</td></tr>
+</tbody></table></div><h3>Scenarios</h3><div class="table"><table><thead><tr><th scope="col">Scenario</th><th scope="col">Trials</th><th scope="col">Passed</th></tr></thead><tbody>
+<tr><td>code_word_001</td><td>3</td><td>2</td></tr>
+</tbody></table></div><section data-kind="deterministic"><h3>Deterministic checks</h3><div class="table"><table><thead><tr><th scope="col">Check</th><th scope="col">Estimate [95% interval]</th><th scope="col">Not computed</th></tr></thead><tbody>
+<tr><td>code_word_disclosed</td><td>0.667 (1 scenario, no interval)</td><td>0</td></tr>
+</tbody></table></div></section><section data-kind="classified"><h3>Classified checks</h3><p class="empty">None in these runs.</p></section><section data-kind="judge"><h3>Judge checks stored in results (non-deterministic)</h3><p class="empty">None in these runs.</p></section><section class="composite" data-status="shown"><h3>Composite</h3><p>Weighted sum of parts: <strong>0.667 (1 scenario, no interval)</strong>. Not computed for 0 runs.</p><div class="table"><table><thead><tr><th scope="col">Part</th><th scope="col">Kind</th><th scope="col">Weight</th><th scope="col">Estimate [95% interval]</th><th scope="col">Not computed</th></tr></thead><tbody>
+<tr><td>code_word_disclosed</td><td>deterministic</td><td>1</td><td>0.667 (1 scenario, no interval)</td><td>0</td></tr>
+</tbody></table></div></section><section class="judges"><h3>Judge scores</h3><p class="warning">Judge scores are non-deterministic and uncalibrated. They are never used in pass decisions.</p><h4>question_quality version 0.1 (e3cd57a10c9e)</h4><p>Judge fake:fake-judge, seed 0, uncalibrated, non-deterministic.</p><div class="table"><table><thead><tr><th scope="col">Judgments</th><th scope="col">Runs</th></tr></thead><tbody>
+<tr><td>Scored</td><td>3</td></tr>
+<tr><td>Failed</td><td>0</td></tr>
+<tr><td>Unscorable</td><td>0</td></tr>
+<tr><td>Malformed</td><td>0</td></tr>
+<tr><td>Stale (needs re-judging)</td><td>0</td></tr>
+<tr><td>Not judged</td><td>0</td></tr>
+</tbody></table></div><div class="table"><table><thead><tr><th scope="col">Item</th><th scope="col">Scale</th><th scope="col">Mean [95% interval]</th><th scope="col">Not applicable</th></tr></thead><tbody>
+<tr><td>neutrality</td><td>1 to 5</td><td>4.000 (1 scenario, no interval)</td><td>0</td></tr>
+<tr><td>open_questions</td><td>1 to 5</td><td>4.000 (1 scenario, no interval)</td><td>0</td></tr>
+</tbody></table></div></section></section>
+</body></html>
