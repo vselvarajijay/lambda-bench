@@ -47,7 +47,8 @@ CASE_FILES = [
 
 
 def _load(name: str) -> list[dict[str, Any]]:
-    return json.loads((GOLDEN / name).read_text(encoding="utf-8"))["cases"]
+    cases: list[dict[str, Any]] = json.loads((GOLDEN / name).read_text(encoding="utf-8"))["cases"]
+    return cases
 
 
 def _basic_case() -> dict[str, Any]:
