@@ -1,0 +1,25 @@
+{
+ "name": "basic_turns",
+ "description": "Three eligible 3 s counterpart turns [1000,4000],[8000,11000],[15000,18000]. Turn 1 answered at 4600 (lat 600), turn 2 at 11300 (lat 300), turn 3 unanswered. Latencies [300,600]: mean 450, p50 450, p90 300+0.9*300=570. Response rate 2/3, early 0. Model 1400+1200=2600 ms, counterpart 9000 ms, ratio 2600/11600=13/58. Occupied 11600 of 20000, dead air 8400/20000=0.42. Target [0.2,0.3] contains 0.2241. Goal censored at 20000 with 2 substantive turns.",
+ "duration_ms": 20000,
+ "counterpart": [
+  {"start_ms": 1000, "end_ms": 4000},
+  {"start_ms": 8000, "end_ms": 11000},
+  {"start_ms": 15000, "end_ms": 18000}
+ ],
+ "model": [
+  {"start_ms": 4600, "end_ms": 6000},
+  {"start_ms": 11300, "end_ms": 12500}
+ ],
+ "talk_target": [0.2, 0.3],
+ "expected": {
+  "latency": {"count": 2, "mean": 450, "p50": 450, "p90": 570},
+  "eligible": {"count": 3, "response_rate": 0.6666666667, "early_start_rate": 0.0},
+  "talk_time_ratio": 0.2241379310,
+  "talk_time_in_target": true,
+  "dead_air_ratio": 0.42,
+  "goal_reached": false,
+  "time_to_goal_ms": 20000,
+  "model_turns_to_goal": 2
+ }
+}

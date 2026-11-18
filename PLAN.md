@@ -815,7 +815,7 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.3: Metrics A: timing and balance
 
-- [ ] Golden timeline format, response latency and rate, talk-time ratio, dead air, efficiency.
+- [x] Golden timeline format, response latency and rate, talk-time ratio, dead air, efficiency.
 - **Run:** `uv run lambda-duplex metrics tests/golden/basic_turns.json`
 - **Test:** `metrics-verifier` hand-builds golden cases, including empty tracks and censored goals.
 - **Done when:** all values match expected results within 1 ms or 1e-6.
