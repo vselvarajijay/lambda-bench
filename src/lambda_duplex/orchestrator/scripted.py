@@ -34,5 +34,8 @@ class ScriptedCounterpart:
     def drain_events(self) -> list[tuple[str, str, dict[str, Any]]]:
         return []
 
+    async def finish(self, pending: MediaFrame | None, tick: int) -> None:
+        return None
+
     async def stop(self) -> None:
         return None

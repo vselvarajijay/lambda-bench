@@ -46,6 +46,7 @@ class OrchestratorConfig:
     clock_mode: ClockMode = "lockstep"
     step_timeout_s: float = 30.0
     audio_sample_rate: int | None = None
+    trust_model_text: bool = True
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,8 @@ class Counterpart(Protocol):
     def is_finished(self) -> bool: ...
 
     def drain_events(self) -> list[DrainedEvent]: ...
+
+    async def finish(self, pending: MediaFrame | None, tick: int) -> None: ...
 
     async def stop(self) -> None: ...
 
@@ -100,6 +103,8 @@ class Orchestrator:
             raise ValueError("max_ticks must not be negative")
         if config.step_timeout_s <= 0:
             raise ValueError("step_timeout_s must be positive")
+        if config.clock_mode == "realtime" and not config.trust_model_text:
+            raise ValueError("realtime runs must use injected model text")
         if config.clock_mode not in adapter.capabilities.clock_modes:
             raise ValueError(f"adapter does not support {config.clock_mode} mode")
         self._adapter = adapter
@@ -157,6 +162,8 @@ class Orchestrator:
         """Deliver model output, then return counterpart media unless it has finished."""
         try:
             if pending is not None:
+                if not self._config.trust_model_text:
+                    pending = replace(pending, text=None)
                 await self._counterpart.hear(pending, tick)
                 if pending.text:
                     self._emit("counterpart", "heard", text=pending.text, from_tick=pending.tick)
@@ -179,6 +186,7 @@ class Orchestrator:
             tick = self._clock.tick
             incoming = await self._counterpart_turn(pending, tick)
             if incoming is None:
+                await self._finish_counterpart(None)
                 return "counterpart"
             model_frame = incoming
             if self._tick_bytes is not None:
@@ -197,7 +205,17 @@ class Orchestrator:
                 self._emit("model", "spoke", text=result.output.text)
             pending = result.output
             self._clock.advance()
+        await self._finish_counterpart(pending)
         return "tick_limit"
+
+    async def _finish_counterpart(self, pending: MediaFrame | None) -> None:
+        try:
+            if pending is not None and not self._config.trust_model_text:
+                pending = replace(pending, text=None)
+            await self._counterpart.finish(pending, self._clock.tick)
+            self._drain_suite_events()
+        except Exception as error:
+            raise _CounterpartFailure(str(error) or type(error).__name__) from error
 
     async def _stop_participants(self, model_started: bool, counterpart_started: bool) -> None:
         if model_started:

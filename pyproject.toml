@@ -24,6 +24,7 @@ audio = [
     "soundfile>=0.13",
     "soxr>=0.5",
 ]
+transcribe = ["lambda-duplex[audio]", "faster-whisper>=1.2"]
 
 [dependency-groups]
 dev = [
@@ -48,7 +49,8 @@ packages = ["src/lambda_duplex"]
 "suites/_template" = "lambda_duplex/_suite_template"
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers -m 'not local'"
+markers = ["local: needs local models or hardware"]
 testpaths = ["tests"]
 
 [tool.ruff]

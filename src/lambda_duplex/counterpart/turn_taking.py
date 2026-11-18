@@ -230,6 +230,16 @@ class TurnController:
     def may_start_speech(self) -> bool:
         return not self._model_active or self.interrupting
 
+    def needs_decision_text(self, tick: int) -> bool:
+        """Return whether an interrupt decision on this tick needs current model text."""
+        if self._decider is None or self._model_start is None or self.interrupting:
+            return False
+        if self._interrupt_blocked or self._last_model_speech != tick:
+            return False
+        slot = self._ms(tick) // self.persona.decision_interval_ms
+        run_ms = self._ms(tick - self._model_start + 1)
+        return slot != self._last_decision_slot and run_ms >= self.persona.talk_limit_ms
+
     def _ms(self, ticks: int) -> int:
         return ticks * self.tick_ms
 

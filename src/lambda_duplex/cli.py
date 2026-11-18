@@ -11,6 +11,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from lambda_duplex import __version__
 from lambda_duplex.adapters.mock import MockAdapter, SpeechRenderer
@@ -33,7 +34,7 @@ from lambda_duplex.suites.loader import (
     load_suite,
     valid_scenarios,
 )
-from lambda_duplex.suites.runtime import mock_for, run_scenario
+from lambda_duplex.suites.runtime import ModelTranscriber, mock_for, run_scenario
 from lambda_duplex.suites.scaffold import ScaffoldError, create_suite
 from lambda_duplex.trajectory.replay import verify_run
 from lambda_duplex.trajectory.seeds import stream_seed
@@ -123,6 +124,24 @@ def _speech_backend(args: argparse.Namespace, seed: int) -> SpeechRenderer | Non
     return SyntheticSpeech(seed)
 
 
+def _live_transcriber(args: argparse.Namespace) -> ModelTranscriber | None:
+    if args.transcript != "whisper":
+        return None
+    from lambda_duplex.audio.transcription import FasterWhisperTranscriber, LiveTranscriber
+
+    return LiveTranscriber(FasterWhisperTranscriber(args.whisper_model))
+
+
+def _transcript_record(
+    args: argparse.Namespace, transcriber: ModelTranscriber | None
+) -> dict[str, str] | None:
+    if args.mode != "audio":
+        return None
+    if transcriber is None:
+        return {"mode": "injected"}
+    return {"mode": "whisper", "model": transcriber.name}
+
+
 def _trial_seed(seed: int, scenario_id: str, trial: int) -> int:
     """Keep trial zero on the requested seed and derive independent later seeds."""
     if trial == 0:
@@ -140,6 +159,14 @@ def _run_suite(args: argparse.Namespace) -> int:
         return 2
     if args.mode == "audio" and args.audio_backend != "synthetic":
         print("audio mode currently requires --audio-backend synthetic", file=sys.stderr)
+        return 2
+    if args.transcript == "whisper" and args.mode != "audio":
+        print("--transcript whisper requires audio mode", file=sys.stderr)
+        return 2
+    try:
+        live_transcriber = _live_transcriber(args)
+    except (ImportError, OSError, RuntimeError, ValueError) as error:
+        print(f"cannot load transcription model: {error}", file=sys.stderr)
         return 2
     try:
         loaded = load_suite(args.suite)
@@ -177,6 +204,7 @@ def _run_suite(args: argparse.Namespace) -> int:
                         condition=args.condition,
                         speech=speech,
                         noise_dir=args.noise_dir,
+                        transcriber=live_transcriber,
                     )
                 )
             except (NoiseAssetError, ValueError) as error:
@@ -205,6 +233,7 @@ def _run_suite(args: argparse.Namespace) -> int:
                         tracks=run.tracks,
                         effects=run.effects,
                         condition=run.condition_details,
+                        transcript=_transcript_record(args, live_transcriber),
                     )
                 except TrajectoryError as error:
                     print(error, file=sys.stderr)
@@ -233,29 +262,50 @@ def _new_suite(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_metric_timeline(path: Path) -> ConversationTimeline:
+def _apply_transcript_words(path: Path, segments: list[dict[str, Any]]) -> str | None:
+    transcript_path = path / "transcript.jsonl"
+    if not transcript_path.is_file():
+        return None
+    positions = {(item["start_ms"], item["end_ms"]): item for item in segments}
+    sources: set[str] = set()
+    for line in transcript_path.read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        if "segment_index" not in row:
+            continue
+        segment = positions.get((row["start_ms"], row["end_ms"]))
+        if segment is None:
+            raise ValueError("transcript does not match the speech timeline")
+        segment["words"] = row["word_count"]
+        sources.add(str(row["source"]))
+    return ",".join(sorted(sources)) or None
+
+
+def _load_metric_timeline(path: Path) -> tuple[ConversationTimeline, str | None]:
     if path.is_file():
-        return timeline_from_dict(json.loads(path.read_text(encoding="utf-8")))
+        return timeline_from_dict(json.loads(path.read_text(encoding="utf-8"))), None
     run = load_run(path)
     stored = json.loads((path / "timeline.json").read_text(encoding="utf-8"))
     suite = load_suite(run.manifest["suite"]["reference"]).suite
     goal_event = suite.manifest.goal_event
     goals = run.trajectory.suite_events(goal_event) if goal_event else ()
-    return timeline_from_dict(
+    model_segments = [dict(segment) for segment in stored["model"]["segments"]]
+    word_source = _apply_transcript_words(path, model_segments)
+    timeline = timeline_from_dict(
         {
             "duration_ms": stored["duration_ms"],
             "counterpart": stored["counterpart"]["segments"],
-            "model": stored["model"]["segments"],
+            "model": model_segments,
             "counterpart_events": stored["counterpart"].get("events", []),
             "goal_ms": goals[0].time_ms if goals else None,
             "talk_target": list(suite.manifest.talk_ratio_target),
         }
     )
+    return timeline, word_source
 
 
 def _metrics(args: argparse.Namespace) -> int:
     try:
-        timeline = _load_metric_timeline(args.path)
+        timeline, word_source = _load_metric_timeline(args.path)
         groups = {
             "all": conversation_metrics,
             "timing": timing_metrics,
@@ -272,7 +322,10 @@ def _metrics(args: argparse.Namespace) -> int:
     ) as error:
         print(f"cannot compute metrics: {error}", file=sys.stderr)
         return 2
-    print(json.dumps(metrics_to_dict(metrics), indent=2, sort_keys=True))
+    output: dict[str, Any] = dict(metrics_to_dict(metrics))
+    if word_source is not None:
+        output["word_count_source"] = word_source
+    print(json.dumps(output, indent=2, sort_keys=True))
     return 0
 
 
@@ -313,6 +366,26 @@ def _assets(args: argparse.Namespace) -> int:
         print(error, file=sys.stderr)
         return 2
     print(f"installed {len(manifest['files'])} noise recordings in {args.out}")
+    return 0
+
+
+def _transcribe(args: argparse.Namespace) -> int:
+    paths = find_run_dirs(args.path)
+    if not paths:
+        print(f"no runs found in {args.path}", file=sys.stderr)
+        return 2
+    try:
+        from lambda_duplex.audio.transcription import FasterWhisperTranscriber, transcribe_run
+
+        transcriber = None
+        if args.backend == "whisper":
+            transcriber = FasterWhisperTranscriber(args.whisper_model)
+        for path in paths:
+            rows = transcribe_run(path, transcriber)
+            print(f"{path}: transcript_rows={len(rows)}")
+    except (ImportError, OSError, RuntimeError, ValueError) as error:
+        print(f"cannot transcribe: {error}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -434,6 +507,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--audio-backend", choices=("synthetic",))
     run.add_argument("--condition", help="audio condition; defaults to the suite setting")
     run.add_argument("--noise-dir", type=Path, help="installed noise recordings")
+    run.add_argument("--transcript", choices=("injected", "whisper"), default="injected")
+    run.add_argument("--whisper-model", default="small.en")
     run.add_argument("--ticks", type=int)
     run.add_argument("--seed", type=int, default=0)
     run.add_argument("--split", choices=("dev", "test"), default="dev")
@@ -454,6 +529,11 @@ def build_parser() -> argparse.ArgumentParser:
     metrics = commands.add_parser("metrics", help="compute conversation metrics")
     metrics.add_argument("path", type=Path, help="timeline JSON file or timed run directory")
     metrics.add_argument("--group", choices=("all", "timing", "overlap"), default="all")
+    transcribe = commands.add_parser("transcribe", help="write a transcript for stored runs")
+    transcribe.add_argument("path", type=Path)
+    transcribe.add_argument("--track", choices=("model",), default="model")
+    transcribe.add_argument("--backend", choices=("whisper", "injected"), default="whisper")
+    transcribe.add_argument("--whisper-model", default="small.en")
     timeline = commands.add_parser("timeline", help="build speech timelines for audio runs")
     timeline.add_argument("path", type=Path)
     timeline.add_argument("--plot", type=Path, help="write a PNG for one run")
@@ -491,6 +571,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _assets(args)
     if args.command == "metrics":
         return _metrics(args)
+    if args.command == "transcribe":
+        return _transcribe(args)
     if args.command == "timeline":
         return _timeline(args)
     if args.command == "new-suite":

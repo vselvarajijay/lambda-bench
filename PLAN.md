@@ -673,7 +673,7 @@ lambda-duplex/
 ├── README.md
 ├── CONTRIBUTING.md
 ├── THIRD_PARTY_NOTICES
-└── pyproject.toml             # extras: [audio], [hosted], [cascaded], [dev]
+└── pyproject.toml             # extras: [audio], [transcribe], [hosted], [cascaded]
 ```
 
 **Why these changes:**
@@ -857,8 +857,8 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.8: Transcription
 
-- [ ] VAD-gated incremental faster-whisper, word times, source labeling, injected-transcript mode.
-- [ ] Speed and accuracy check on DGX Spark.
+- [x] VAD-gated incremental faster-whisper, word times, source labeling, injected-transcript mode.
+- [x] Speed and accuracy check on DGX Spark.
 - **Run:** `uv run lambda-duplex transcribe runs/a1 --track model` `[local]`
 - **Test:** CI uses a fake transcriber. A local marked test checks known clips and silence hallucinations.
 - **Done when:** the chosen model meets a measured word-error target and keeps up in `realtime` mode, or that mode is limited to injected transcripts.
