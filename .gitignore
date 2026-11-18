@@ -12,4 +12,5 @@ reports/
 suites/*/test/
 .claude/private-paths.txt
 .claude/settings.local.json
+.claude/worktrees/
 data/

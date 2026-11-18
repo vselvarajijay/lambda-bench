@@ -1099,6 +1099,8 @@ def test_nested_request_values_are_checked_for_identity(
         ("acme/secretmodel:v2", "acme/secretmodel"),
         ("acme/secretmodel:v2", "v2"),
         ("acme/secretmodel@sha-1", "sha-1"),
+        ("acme-2/model:v2", "acme-2"),
+        ("acme/team-7/model:v2", "team-7"),
     ],
 )
 def test_reference_forms_are_hidden(tmp_path: Path, reference: str, spoken: str) -> None:
