@@ -387,13 +387,13 @@ def test_condition_records_are_honest_about_missing_behavior() -> None:
     accent = condition_record(get_condition("ablate_accent"))
 
     assert realistic["requested"]["turn_taking"] == "free"
-    assert realistic["applied"]["turn_taking"] == "scripted"
-    assert set(realistic["unimplemented"]) == {
-        "varied_voices",
-        "free_turn_taking",
-        "vocal_tics",
-        "non_directed_speech",
+    assert realistic["applied"]["turn_taking"] == "free"
+    assert realistic["applied"]["speech_inserts"] is True
+    assert condition_record(get_condition("clean"))["applied"] == {
+        "voices": "single",
+        "turn_taking": "scripted",
     }
+    assert realistic["unimplemented"] == ["varied_voices"]
     assert accent["unimplemented"] == ["varied_voices"]
     assert condition_record(get_condition("clean"))["unimplemented"] == []
 
@@ -401,7 +401,8 @@ def test_condition_records_are_honest_about_missing_behavior() -> None:
 def test_stored_audio_run_records_condition(tmp_path: Path) -> None:
     stored = load_run(run_condition(tmp_path / "runs", "ablate_turns"))
 
-    assert stored.manifest["condition"]["unimplemented"] == ["free_turn_taking"]
+    assert stored.manifest["condition"]["applied"]["turn_taking"] == "free"
+    assert stored.manifest["condition"]["unimplemented"] == []
 
 
 def test_effect_schedule_varies_by_scenario() -> None:

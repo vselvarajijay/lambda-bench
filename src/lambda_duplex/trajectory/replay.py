@@ -154,6 +154,11 @@ async def verify_run(
         problems.extend(track_problems)
         model = RecordedModel(stored, stored_tracks["model"], samples)
         speech = SyntheticSpeech(settings["seed"])
+    condition_details = stored.manifest.get("condition") or {}
+    requested_turns = condition_details.get("requested", {}).get("turn_taking")
+    applied_turns = condition_details.get("applied", {}).get("turn_taking")
+    if requested_turns == "free" and applied_turns != "free":
+        raise TrajectoryError("this run predates free turn-taking and cannot be replayed")
     effects = stored.manifest.get("effects")
     noise_source = (effects or {}).get("noise_source")
     uses_recording = noise_source is not None and noise_source.get("type") != "generated"

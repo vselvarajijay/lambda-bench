@@ -163,6 +163,7 @@ def test_timeline_uses_vad_for_model_and_plan_for_counterpart(
         "start_ms": 0,
         "end_ms": pytest.approx(1500, abs=1),
         "interrupted": False,
+        "eligible": True,
     }
     assert timeline["vad"]["model_sha256"] == MODEL_SHA256
     assert load_probabilities(path).size > 0

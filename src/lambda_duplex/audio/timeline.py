@@ -47,9 +47,25 @@ def counterpart_segments(run: StoredRun) -> list[dict[str, Any]]:
             "start_ms": event.data["start_tick"] * tick_ms,
             "end_ms": event.data["start_tick"] * tick_ms + event.data["duration_ms"],
             "interrupted": event.data["interrupted"],
+            "eligible": not (event.data["interrupted"] or event.data.get("injected", False)),
         }
         for event in run.trajectory.events
         if event.source == "counterpart" and event.type == "segment_delivered"
+    ]
+
+
+def counterpart_events(run: StoredRun, duration_ms: float) -> list[dict[str, Any]]:
+    """Return counterpart sounds that are not conversational turns."""
+    return [
+        {
+            "kind": event.data["kind"],
+            "start_ms": event.data["start_ms"],
+            "end_ms": min(event.data["end_ms"], duration_ms),
+        }
+        for event in run.trajectory.events
+        if event.source == "counterpart"
+        and event.type == "counterpart_event"
+        and event.data["start_ms"] <= duration_ms
     ]
 
 
@@ -84,7 +100,11 @@ def build_timeline(
             "source": "vad:model_track",
             "segments": [asdict(segment) for segment in segments],
         },
-        "counterpart": {"source": "simulator_plan", "segments": counterpart_segments(run)},
+        "counterpart": {
+            "source": "simulator_plan",
+            "segments": counterpart_segments(run),
+            "events": counterpart_events(run, duration_ms),
+        },
     }
     text = json.dumps(timeline, indent=2, sort_keys=True, allow_nan=False) + "\n"
     _atomic_bytes(path / "timeline.json", text.encode())

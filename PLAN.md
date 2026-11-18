@@ -848,9 +848,9 @@ After M1, 2.1 to 2.4 and 3.1 to 3.5 can proceed in parallel. Each adapter slice 
 
 #### Slice 2.7: Turn-taking policy
 
-- [ ] Interrupt, yield and backchannel decisions, with deterministic rules first and an optional LLM decision.
-- [ ] Counterpart vocal tics and non-directed speech for the `realistic` condition.
-- [ ] Persona settings for patience, interruptiveness and silence tolerance.
+- [x] Interrupt, yield and backchannel decisions, with deterministic rules first and an optional LLM decision.
+- [x] Counterpart vocal tics and non-directed speech for the `realistic` condition.
+- [x] Persona settings for patience, interruptiveness and silence tolerance.
 - **Run:** `uv run lambda-duplex run --suite demo --model mock --mode audio --condition ablate_turns --seed 3 --out runs/t1`
 - **Test:** scripted model behaviors trigger expected actions on exact ticks.
 - **Done when:** interruption, yield and backchannel events all appear in the mock scenario and replay correctly.
