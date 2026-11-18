@@ -9,6 +9,7 @@ from lambda_duplex.llm import (
     LLMDisabledError,
     LLMGateway,
     LLMRequest,
+    LLMResponse,
     ReplayMissError,
 )
 
@@ -93,3 +94,44 @@ def test_request_key_changes_with_parameters() -> None:
     other = LLMRequest(REQUEST.model, REQUEST.messages, REQUEST.purpose, {"temperature": 1})
 
     assert REQUEST.key() != other.key()
+
+
+class SlowProvider:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls += 1
+        text = f"reply-{self.calls}"
+        await asyncio.sleep(0)
+        return LLMResponse(text, "slow-1")
+
+
+async def _pair(gateway: LLMGateway) -> list[str]:
+    first, second = await asyncio.gather(gateway.complete(REQUEST), gateway.complete(REQUEST))
+    return [first.text, second.text]
+
+
+def test_concurrent_identical_calls_replay_in_order() -> None:
+    recorder = LLMGateway("record", SlowProvider())
+    recorded = asyncio.run(_pair(recorder))
+
+    assert [entry["occurrence"] for entry in recorder.entries] == [0, 1]
+    assert asyncio.run(_pair(LLMGateway("replay", entries=recorder.entries))) == recorded
+
+
+def test_unstorable_response_does_not_use_up_an_occurrence() -> None:
+    class BadThenGood(SlowProvider):
+        async def complete(self, request: LLMRequest) -> LLMResponse:
+            response = await super().complete(request)
+            if self.calls == 1:
+                return LLMResponse("bad", "slow-1", {"value": float("nan")})
+            return response
+
+    gateway = LLMGateway("record", BadThenGood())
+    with pytest.raises(ValueError):
+        asyncio.run(gateway.complete(REQUEST))
+
+    asyncio.run(gateway.complete(REQUEST))
+
+    assert [entry["occurrence"] for entry in gateway.entries] == [0]

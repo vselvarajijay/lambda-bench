@@ -602,6 +602,7 @@ def _judge(args: argparse.Namespace) -> int:
     model = args.model or DEFAULT_MODELS[args.provider]
     rubrics: dict[str, JudgeRubric] = {}
     healthy = True
+    broken = False
     for path in shuffled_runs(paths, args.seed, args.rubric):
         try:
             config = JudgeConfig(
@@ -617,7 +618,12 @@ def _judge(args: argparse.Namespace) -> int:
             outcome = asyncio.run(judge_run(path, config))
         except (JudgeError, RubricError, SuiteError, TrajectoryError) as error:
             print(f"{path}: {error}", file=sys.stderr)
-            return 2
+            broken = True
+            continue
+        except (KeyError, ValueError) as error:
+            print(f"{path}: judge failed: {error!r}", file=sys.stderr)
+            broken = True
+            continue
         record = outcome.record
         healthy = healthy and record["status"] != "failed"
         scores = " ".join(f"{item['id']}={item['score']}" for item in record["items"])
@@ -629,6 +635,8 @@ def _judge(args: argparse.Namespace) -> int:
         for problem in record["errors"]:
             print(f"  {problem}")
     print("judge scores are non-deterministic and stored apart from results in judges.jsonl")
+    if broken:
+        return 2
     return 0 if healthy else 1
 
 

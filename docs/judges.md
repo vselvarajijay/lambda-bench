@@ -21,7 +21,7 @@ A record's `status` is one of:
 
 - `scored`: every item passed validation.
 - `failed`: retries ran out or blinding failed. No scores are stored, and the command exits with 1.
-- `unscorable`: the run did not complete or the model said nothing. No judge call is made.
+- `unscorable`: the run did not complete, the model said nothing, or model audio was truncated and only adapter text exists. No judge call is made. Run `transcribe` on the audio to judge a truncated run.
 
 ## Rubrics
 
@@ -54,6 +54,10 @@ The judge sees only the rubric and a transcript with speakers `A` and `B`. It do
 - Rubric items and runs are shuffled using `--seed`.
 - Each request is checked before sending. If an identity term remains, no call is made and the record is `failed`.
 
+## What the judge reads
+
+Model speech comes from the first available source: a transcript of the model audio, live transcription events, then adapter text. An interrupted counterpart turn appears with `cut_off` and no words, because the run does not record which words were played. This keeps speech nobody heard away from the judge, at the cost of the part that was heard.
+
 ## Cache
 
-A repeated request uses the stored reply, so a second pass costs nothing and writes the same `judges.jsonl`. Changing the transcript, rubric or judge model changes the request. A new seed changes it only when it produces a different item order. `--refresh` asks the provider again.
+A repeated request uses the stored reply, so a second pass costs nothing and writes the same `judges.jsonl`. Changing the transcript, rubric or judge model changes the request. A new seed changes it only when it produces a different item order. The provider is part of the request key. Replies from a pass that ends `failed` are dropped, so the next pass asks again. `--refresh` also asks the provider again.

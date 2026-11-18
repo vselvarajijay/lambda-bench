@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
@@ -77,27 +78,30 @@ class LLMGateway:
         self._provider = provider
         self._entries = [dict(entry) for entry in entries]
         self._lookup = {(entry["key"], entry["occurrence"]): entry for entry in self._entries}
-        self._seen: Counter[str] = Counter()
+        self._next: Counter[str] = Counter()
+        self._free: defaultdict[str, list[int]] = defaultdict(list)
 
     @property
     def entries(self) -> Sequence[Mapping[str, Any]]:
         return tuple(self._entries)
 
-    async def complete(self, request: LLMRequest) -> LLMResponse:
-        if self.mode == "off":
-            raise LLMDisabledError(f"LLM calls are disabled ({request.purpose})")
-        key = request.key()
-        occurrence = self._seen[key]
+    def _reserve(self, key: str) -> int:
+        """Claim an occurrence before awaiting, so concurrent calls stay distinct."""
+        if self._free[key]:
+            return heapq.heappop(self._free[key])
+        occurrence = self._next[key]
+        self._next[key] += 1
+        return occurrence
+
+    async def _resolve(self, request: LLMRequest, key: str, occurrence: int) -> LLMResponse:
         if self.mode in ("replay", "cache"):
             cached = self._lookup.get((key, occurrence))
             if cached is not None:
-                self._seen[key] += 1
                 return LLMResponse(**cached["response"])
             if self.mode == "replay":
                 raise ReplayMissError(f"no recorded response for {request.purpose}")
         assert self._provider is not None
         response = await self._provider.complete(request)
-        self._seen[key] += 1
         entry = {
             "key": key,
             "occurrence": occurrence,
@@ -108,3 +112,14 @@ class LLMGateway:
         self._entries.append(stored)
         self._lookup[(key, occurrence)] = stored
         return response
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        if self.mode == "off":
+            raise LLMDisabledError(f"LLM calls are disabled ({request.purpose})")
+        key = request.key()
+        occurrence = self._reserve(key)
+        try:
+            return await self._resolve(request, key, occurrence)
+        except BaseException:
+            heapq.heappush(self._free[key], occurrence)
+            raise

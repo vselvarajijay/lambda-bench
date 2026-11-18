@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -574,6 +576,7 @@ def test_cut_off_counterpart_turn_is_marked(tmp_path: Path) -> None:
     turns = blinded_transcript(load_run(run)).turns
 
     assert turns[0].cut_off is True
+    assert turns[0].text == ""
     assert "cut_off" not in turns[1].public()
 
 
@@ -638,3 +641,174 @@ def test_cli_accepts_a_rubric_file(tmp_path: Path) -> None:
 def test_unknown_provider_is_rejected() -> None:
     with pytest.raises(ValueError, match="unknown judge provider"):
         create_provider("real")
+
+
+def _add_event(run: Path, **values: Any) -> None:
+    path = run / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows.append({**rows[-1], **values})
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+
+def _write_injected_transcript(run: Path) -> None:
+    row = {"time_ms": 0, "text": "Planned words.", "source": "injected"}
+    (run / "transcript.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+
+def test_heard_speech_outranks_an_injected_transcript(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    _write_injected_transcript(run)
+    _add_event(
+        run,
+        source="counterpart",
+        type="model_transcript",
+        data={"text": "Heard words.", "start_tick": 1},
+    )
+
+    transcript = blinded_transcript(load_run(run))
+
+    assert transcript.source == "asr_events"
+    assert [turn.text for turn in transcript.turns if turn.speaker == "A"] == ["Heard words."]
+
+
+@pytest.mark.parametrize("injected", [False, True])
+def test_truncated_adapter_text_is_not_judged(tmp_path: Path, injected: bool) -> None:
+    run = demo_run(tmp_path / "runs")
+    if injected:
+        _write_injected_transcript(run)
+    _add_event(run, source="model", type="truncated", data={"ms": 160})
+
+    outcome = judge(run, config(lambda request, call: pytest.fail("no call expected")))
+
+    assert outcome.record["status"] == "unscorable"
+    assert "truncated" in outcome.record["errors"][0]
+
+
+def test_cut_off_words_never_reach_the_judge(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    spoken = next(
+        event
+        for event in load_run(run).trajectory.events
+        if event.source == "counterpart" and event.type == "spoke"
+    )
+    path = run / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for row in rows:
+        if row["type"] == "segment_delivered" and row["data"]["start_tick"] == spoken.tick:
+            row["data"]["interrupted"] = True
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    seen: list[LLMRequest] = []
+
+    def respond(request: LLMRequest, call: int) -> str:
+        seen.append(request)
+        return fake_judge_response(request, call)
+
+    outcome = judge(run, config(respond))
+
+    assert outcome.record["status"] == "scored"
+    assert spoken.data["text"] not in seen[0].messages[1]["content"]
+    assert spoken.data["text"] not in (run / "judges.jsonl").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("said", "quoted"), [("I don\u2019t know", "don't know"), ("I don't know", "don\u2019t know")]
+)
+def test_quotes_accept_either_apostrophe(said: str, quoted: str) -> None:
+    row = reply()
+    for item in row["items"]:
+        item["evidence"] = [{"turn": 1, "quote": quoted}]
+
+    assert validate_response(json.dumps(row), RUBRIC, (TURNS[0], Turn(1, "A", said)))
+
+
+def test_cache_is_not_shared_between_providers(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    provider = FakeProvider(fake_judge_response)
+
+    outcome = judge(run, JudgeConfig(RUBRIC, "other", provider, "fake-judge", backoff_s=0))
+
+    assert outcome.provider_calls == 1
+    assert provider.calls == 1
+
+
+def test_failed_pass_asks_again_on_the_next_run(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    assert judge(run, config(lambda r, c: "nonsense", retries=1)).record["status"] == "failed"
+
+    outcome = judge(run, config(retries=1))
+
+    assert outcome.record["status"] == "scored"
+    assert outcome.provider_calls == 1
+
+
+def test_replies_from_a_crash_are_dropped_if_the_next_pass_fails(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+
+    def crash(request: LLMRequest, call: int) -> str:
+        if call == 0:
+            return "nonsense"
+        raise KeyError("provider bug")
+
+    with pytest.raises(KeyError):
+        judge(run, config(crash))
+    judge(run, config(lambda r, c: "still nonsense", retries=1))
+
+    outcome = judge(run, config(retries=1))
+
+    assert outcome.record["status"] == "scored"
+    assert outcome.provider_calls == 1
+
+
+def test_two_character_model_names_are_hidden(tmp_path: Path) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    run.manifest["model"]["name"] = "o1"
+
+    assert redact("I am o1 today", identity_terms(run)) == ("I am [REDACTED] today", 1)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda row: row.update(calibration="calibrated"),
+        lambda row: row["rubric"].pop("id"),
+        lambda row: row["judge"].pop("provider"),
+        lambda row: row["blinding"].pop("seed"),
+    ],
+)
+def test_malformed_stored_judgment_is_refused(
+    tmp_path: Path, change: Callable[[dict[str, Any]], Any]
+) -> None:
+    run = demo_run(tmp_path / "runs")
+    judge(run, config())
+    path = run / "judges.jsonl"
+    row = json.loads(path.read_text(encoding="utf-8"))
+    change(row)
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(JudgeError, match="invalid judgment"):
+        load_judgments(run)
+
+
+def test_parallel_passes_keep_every_judgment(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+
+    with ThreadPoolExecutor(8) as pool:
+        list(pool.map(lambda seed: judge(run, config(seed=seed)), range(8)))
+
+    assert len(load_judgments(run)) == 8
+    assert not list(run.glob(".judges.jsonl.*"))
+
+
+def test_cli_finishes_other_runs_after_a_bad_one(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    first = demo_run(root)
+    second = first.with_name(first.name + "-copy")
+    shutil.copytree(first, second)
+    (first / "transcript.jsonl").write_text("not json\n", encoding="utf-8")
+
+    code = cli.main(["judge", str(root), "--rubric", "question_quality", "--provider", "fake"])
+
+    assert code == 2
+    assert len(load_judgments(second)) == 1
+    assert not (first / "judges.jsonl").exists()

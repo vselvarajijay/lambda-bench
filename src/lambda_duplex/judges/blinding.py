@@ -49,6 +49,7 @@ class BlindedTranscript:
     source: str
     redactions: int
     terms: tuple[str, ...]
+    delivery_known: bool = True
 
     @property
     def sha256(self) -> str:
@@ -58,7 +59,9 @@ class BlindedTranscript:
 
 
 def _usable(term: str) -> bool:
-    return len(term) >= 3 and any(character.isalpha() for character in term)
+    if not any(character.isalpha() for character in term):
+        return False
+    return len(term) >= 3 or (len(term) == 2 and any(c.isdigit() for c in term))
 
 
 def _looks_like_identifier(value: str) -> bool:
@@ -126,21 +129,35 @@ def _transcript_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str] | No
     return rows, "transcript:" + "+".join(sorted(sources))
 
 
-def _model_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str]:
+def _model_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str, bool]:
+    """Return model speech, preferring text derived from the delivered audio.
+
+    Adapter text can run ahead of playback, so after a truncation it does not show
+    what was delivered. The final value says whether delivery is known.
+    """
     stored = _transcript_rows(run)
-    if stored is not None:
-        return stored
+    if stored is not None and "injected" not in stored[1]:
+        return stored[0], stored[1], True
     events = run.trajectory.events
     tick_ms = run.trajectory.tick_ms
     heard = [e for e in events if e.source == "counterpart" and e.type == "model_transcript"]
     if heard:
-        return [(e.data["start_tick"] * tick_ms, e.data["text"]) for e in heard], "asr_events"
+        rows = [(e.data["start_tick"] * tick_ms, e.data["text"]) for e in heard]
+        return rows, "asr_events", True
+    truncated = any(e.source == "model" and e.type == "truncated" for e in events)
+    if stored is not None:
+        return stored[0], stored[1], not truncated
     spoke = [e for e in events if e.source == "model" and e.type == "spoke"]
-    return [(e.time_ms, e.data["text"]) for e in spoke], "adapter_text"
+    return [(e.time_ms, e.data["text"]) for e in spoke], "adapter_text", not truncated
 
 
 def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> BlindedTranscript:
-    """Return the conversation with neutral speakers and identity terms removed."""
+    """Return the conversation with neutral speakers and identity terms removed.
+
+    The words of an interrupted counterpart turn are withheld. Only part of that turn
+    was played and the stored events do not say which words, so showing the plan could
+    credit or reveal speech nobody heard.
+    """
     events = run.trajectory.events
     cut_starts = {
         event.data["start_tick"]
@@ -150,11 +167,17 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
         and event.data.get("interrupted")
     }
     rows: list[tuple[float, int, str, str, bool]] = [
-        (event.time_ms, 0, OTHER, event.data["text"], event.tick in cut_starts)
+        (
+            event.time_ms,
+            0,
+            OTHER,
+            "" if event.tick in cut_starts else event.data["text"],
+            event.tick in cut_starts,
+        )
         for event in events
         if event.source == "counterpart" and event.type == "spoke"
     ]
-    model_rows, source = _model_rows(run)
+    model_rows, source, delivery_known = _model_rows(run)
     rows.extend((time_ms, 1, EVALUATED, text, False) for time_ms, text in model_rows)
     rows.sort(key=lambda row: row[:2])
     terms = identity_terms(run, extra_terms)
@@ -163,9 +186,9 @@ def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> Blind
     for _, _, speaker, raw, cut_off in rows:
         text, count = redact(raw.strip(), terms)
         total += count
-        if text:
+        if text or cut_off:
             turns.append(Turn(len(turns), speaker, text, cut_off))
-    return BlindedTranscript(tuple(turns), source, total, terms)
+    return BlindedTranscript(tuple(turns), source, total, terms, delivery_known)
 
 
 def assert_blinded(request: LLMRequest, terms: Sequence[str], run: StoredRun) -> None:
