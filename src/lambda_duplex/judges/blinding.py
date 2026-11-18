@@ -73,13 +73,7 @@ def identity_terms(run: StoredRun, extra: Iterable[str] = ()) -> tuple[str, ...]
     """Return strings that would identify the evaluated model."""
     model: Mapping[str, Any] = run.manifest["model"]
     reference = str(model["reference"])
-    terms = {
-        str(model["name"]),
-        reference,
-        reference.partition(":")[0],
-        reference.rstrip("/").rsplit("/", 1)[-1],
-        *extra,
-    }
+    terms = {str(model["name"]), reference, *re.split(r"[:/@]", reference)}
     candidates = [model["version"], *dict(model["settings"]).values()]
     terms.update(
         value for value in candidates if isinstance(value, str) and _looks_like_identifier(value)
@@ -87,8 +81,8 @@ def identity_terms(run: StoredRun, extra: Iterable[str] = ()) -> tuple[str, ...]
     for event in run.trajectory.events:
         if event.source == "model" and event.type == "started":
             terms.add(str(event.data.get("session_id", "")))
-    cleaned = {term.strip() for term in terms}
-    usable = (term for term in cleaned if _usable(term))
+    usable = {term.strip() for term in terms if _usable(term.strip())}
+    usable.update(term.strip() for term in extra if term.strip())
     return tuple(sorted(usable, key=lambda term: (-len(term), term)))
 
 
@@ -132,8 +126,8 @@ def _transcript_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str] | No
 def _model_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str, bool]:
     """Return model speech, preferring text derived from the delivered audio.
 
-    Adapter text can run ahead of playback, so after a truncation it does not show
-    what was delivered. The final value says whether delivery is known.
+    Adapter text can run ahead of playback, so in an audio run it does not show what
+    was delivered. The final value says whether delivery is known.
     """
     stored = _transcript_rows(run)
     if stored is not None and "injected" not in stored[1]:
@@ -145,34 +139,35 @@ def _model_rows(run: StoredRun) -> tuple[list[tuple[float, str]], str, bool]:
         rows = [(e.data["start_tick"] * tick_ms, e.data["text"]) for e in heard]
         return rows, "asr_events", True
     truncated = any(e.source == "model" and e.type == "truncated" for e in events)
+    known = run.manifest.get("audio") is None and not truncated
     if stored is not None:
-        return stored[0], stored[1], not truncated
+        return stored[0], stored[1], known
     spoke = [e for e in events if e.source == "model" and e.type == "spoke"]
-    return [(e.time_ms, e.data["text"]) for e in spoke], "adapter_text", not truncated
+    return [(e.time_ms, e.data["text"]) for e in spoke], "adapter_text", known
 
 
 def blinded_transcript(run: StoredRun, extra_terms: Iterable[str] = ()) -> BlindedTranscript:
     """Return the conversation with neutral speakers and identity terms removed.
 
-    The words of an interrupted counterpart turn are withheld. Only part of that turn
-    was played and the stored events do not say which words, so showing the plan could
-    credit or reveal speech nobody heard.
+    Counterpart words are shown only for turns that finished playing. An interrupted
+    turn, or one still playing when the run ended, may hold words nobody heard, and the
+    stored events do not say which words were played.
     """
     events = run.trajectory.events
-    cut_starts = {
+    finished_starts = {
         event.data["start_tick"]
         for event in events
         if event.source == "counterpart"
         and event.type == "segment_delivered"
-        and event.data.get("interrupted")
+        and not event.data.get("interrupted")
     }
     rows: list[tuple[float, int, str, str, bool]] = [
         (
             event.time_ms,
             0,
             OTHER,
-            "" if event.tick in cut_starts else event.data["text"],
-            event.tick in cut_starts,
+            event.data["text"] if event.tick in finished_starts else "",
+            event.tick not in finished_starts,
         )
         for event in events
         if event.source == "counterpart" and event.type == "spoke"

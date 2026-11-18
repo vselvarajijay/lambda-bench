@@ -585,7 +585,13 @@ def _judge_rubric(
     else:
         reference = args.suite or load_run(path).manifest["suite"]["reference"]
     if reference not in rubrics:
-        root = load_suite(reference).root if reference else None
+        root = None
+        if reference:
+            try:
+                root = load_suite(reference).root
+            except SuiteError:
+                if args.suite:
+                    raise
         rubrics[reference] = resolve_rubric(args.rubric, root)
     return rubrics[reference]
 
@@ -620,8 +626,8 @@ def _judge(args: argparse.Namespace) -> int:
             print(f"{path}: {error}", file=sys.stderr)
             broken = True
             continue
-        except (KeyError, ValueError) as error:
-            print(f"{path}: judge failed: {error!r}", file=sys.stderr)
+        except Exception as error:
+            print(f"{path}: judge crashed: {error!r}", file=sys.stderr)
             broken = True
             continue
         record = outcome.record

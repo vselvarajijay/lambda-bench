@@ -5,6 +5,7 @@ import json
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -681,7 +682,7 @@ def test_truncated_adapter_text_is_not_judged(tmp_path: Path, injected: bool) ->
     outcome = judge(run, config(lambda request, call: pytest.fail("no call expected")))
 
     assert outcome.record["status"] == "unscorable"
-    assert "truncated" in outcome.record["errors"][0]
+    assert "cannot show what was delivered" in outcome.record["errors"][0]
 
 
 def test_cut_off_words_never_reach_the_judge(tmp_path: Path) -> None:
@@ -754,6 +755,8 @@ def test_replies_from_a_crash_are_dropped_if_the_next_pass_fails(tmp_path: Path)
         judge(run, config(crash))
     judge(run, config(lambda r, c: "still nonsense", retries=1))
 
+    assert "nonsense" not in (run / "judge_cache.jsonl").read_text(encoding="utf-8")
+
     outcome = judge(run, config(retries=1))
 
     assert outcome.record["status"] == "scored"
@@ -812,3 +815,126 @@ def test_cli_finishes_other_runs_after_a_bad_one(tmp_path: Path) -> None:
     assert code == 2
     assert len(load_judgments(second)) == 1
     assert not (first / "judges.jsonl").exists()
+
+
+def _set_delivery(run: Path, change: Callable[[dict[str, Any]], bool]) -> str:
+    """Edit the first counterpart turn's delivery events and return its text."""
+    stored = load_run(run).trajectory.events
+    spoken = next(e for e in stored if e.source == "counterpart" and e.type == "spoke")
+    path = run / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    kept = []
+    for row in rows:
+        matches = row["type"] == "segment_delivered" and row["data"]["start_tick"] == spoken.tick
+        if not matches or change(row["data"]):
+            kept.append(row)
+    path.write_text("".join(json.dumps(row) + "\n" for row in kept), encoding="utf-8")
+    return str(spoken.data["text"])
+
+
+def test_turn_still_playing_at_the_end_is_withheld(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    text = _set_delivery(run, lambda data: False)
+
+    outcome = judge(run, config())
+
+    assert outcome.record["transcript"]["turns"][0]["cut_off"] is True
+    assert text not in (run / "judges.jsonl").read_text(encoding="utf-8")
+    assert text not in (run / "judge_cache.jsonl").read_text(encoding="utf-8")
+
+
+def test_finished_turn_is_matched_by_its_start(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+
+    def lengthen(data: dict[str, Any]) -> bool:
+        data["end_tick"] = data["start_tick"] + 5
+        return True
+
+    text = _set_delivery(run, lengthen)
+
+    assert blinded_transcript(load_run(run)).turns[0].text == text
+
+
+def test_interrupted_turn_is_matched_by_its_start(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+
+    def interrupt(data: dict[str, Any]) -> bool:
+        data["end_tick"] = data["start_tick"] + 5
+        data["interrupted"] = True
+        return True
+
+    _set_delivery(run, interrupt)
+
+    assert blinded_transcript(load_run(run)).turns[0].text == ""
+
+
+def test_adapter_text_is_not_judged_in_an_audio_run(tmp_path: Path) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    audio_run = replace(run, manifest={**run.manifest, "audio": {"tracks": []}})
+
+    assert blinded_transcript(audio_run).delivery_known is False
+
+
+@pytest.mark.parametrize(
+    ("reference", "hidden"),
+    [("acme/secretmodel:v2", "secretmodel"), ("mock:secret-tune", "secret-tune")],
+)
+def test_parts_of_the_model_reference_are_hidden(
+    tmp_path: Path, reference: str, hidden: str
+) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    run.manifest["model"]["reference"] = reference
+
+    assert redact(f"I am {hidden}.", identity_terms(run))[0] == "I am [REDACTED]."
+
+
+def test_short_blind_terms_are_honored_and_common_words_are_not_added(tmp_path: Path) -> None:
+    run = load_run(demo_run(tmp_path / "runs"))
+    run.manifest["model"]["name"] = "go"
+    terms = identity_terms(run, ("HF", "42"))
+
+    assert redact("Let us go to HF and 42", terms) == (
+        "Let us go to [REDACTED] and [REDACTED]",
+        2,
+    )
+
+
+def test_quote_from_the_wrong_turn_is_rejected() -> None:
+    row = reply()
+    for item in row["items"]:
+        item["evidence"] = [{"turn": 1, "quote": "Hello there"}]
+
+    with pytest.raises(JudgeResponseError, match="not in turn 1"):
+        validate_response(json.dumps(row), RUBRIC, TURNS)
+
+
+def test_failed_refresh_keeps_the_stored_score_and_cache(tmp_path: Path) -> None:
+    run = demo_run(tmp_path / "runs")
+    first = judge(run, config())
+    cache = (run / "judge_cache.jsonl").read_bytes()
+
+    def outage(request: LLMRequest, call: int) -> str:
+        raise OSError("outage")
+
+    outcome = judge(run, config(outage, refresh=True, retries=1))
+
+    assert outcome.record["status"] == "failed"
+    assert "kept the earlier scored judgment" in outcome.record["errors"]
+    assert load_judgments(run) == [first.record]
+    assert (run / "judge_cache.jsonl").read_bytes() == cache
+
+
+def test_cli_survives_an_unexpected_crash_in_one_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "runs"
+    first = demo_run(root)
+    second = first.with_name(first.name + "-copy")
+    shutil.copytree(first, second)
+    (first / "judges.jsonl").mkdir()
+
+    code = cli.main(["judge", str(root), "--rubric", "question_quality", "--provider", "fake"])
+
+    assert code == 2
+    assert len(load_judgments(second)) == 1
+    assert first.name in capsys.readouterr().err
