@@ -23,3 +23,8 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
       - run: uv run lambda-duplex doctor
+      - name: Scaffold and run a new suite
+        run: |
+          uv run lambda-duplex new-suite ci_suite --out "$RUNNER_TEMP/ci_suite"
+          uv run lambda-duplex suites validate "$RUNNER_TEMP/ci_suite"
+          uv run lambda-duplex run --suite "$RUNNER_TEMP/ci_suite" --model mock --mode text
