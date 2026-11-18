@@ -28,9 +28,10 @@ def resample_pcm(pcm: bytes, source_rate: int, target_rate: int) -> bytes:
     return np.asarray(result, dtype="<i2").tobytes()
 
 
-def read_track(path: Path) -> bytes:
-    data, _ = sf.read(path, dtype="int16", always_2d=False)
-    return np.asarray(data, dtype="<i2").tobytes()
+def read_track(path: Path) -> tuple[bytes, int]:
+    """Read a mono track and return PCM with its sample rate."""
+    data, sample_rate = sf.read(path, dtype="int16", always_2d=False)
+    return np.asarray(data, dtype="<i2").tobytes(), int(sample_rate)
 
 
 class TrackRecorder:
@@ -68,7 +69,11 @@ class TrackRecorder:
         folder.mkdir()
         tracks: dict[str, Any] = {}
         for name, pcm in self.tracks().items():
-            sf.write(folder / f"{name}.flac", to_array(pcm), self.sample_rate, subtype="PCM_16")
+            path = folder / f"{name}.flac"
+            if pcm:
+                sf.write(path, to_array(pcm), self.sample_rate, subtype="PCM_16")
+            else:
+                path.write_bytes(b"")
             tracks[name] = {
                 "samples": sample_count(pcm),
                 "sha256": hashlib.sha256(pcm).hexdigest(),

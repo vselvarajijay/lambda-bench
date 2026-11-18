@@ -64,6 +64,7 @@ class _Playback:
     segment_id: int
     start_tick: int
     audio: PlayoutBuffer | None
+    last_played_tick: int | None = None
 
 
 class PolicyCounterpart:
@@ -115,7 +116,7 @@ class PolicyCounterpart:
             self._queue.clear()
             self._hold_until_tick = self._clock.tick
             if self._playing is not None:
-                self._deliver(self._playing, self._clock.tick, interrupted=True)
+                self._deliver(self._playing, self._clock.tick - 1, interrupted=True)
                 self._hold_until_tick = self._clock.tick
         self._queue.extend(output.segments)
         self._record(output.events, "policy")
@@ -141,6 +142,9 @@ class PolicyCounterpart:
 
     async def hear(self, frame: MediaFrame, tick: int) -> None:
         self._clock.tick = tick
+        playing = self._playing
+        if playing is not None and playing.last_played_tick is not None:
+            self._deliver(playing, playing.last_played_tick, interrupted=False)
         if not frame.text:
             return
         utterance = ModelUtterance(frame.text, frame.tick)
@@ -160,9 +164,12 @@ class PolicyCounterpart:
             text = self._start_next(tick).segment.text
         playback = self._playing
         assert playback is not None
-        pcm = b"" if playback.audio is None else playback.audio.pop_tick()
-        if playback.audio is None or playback.audio.pending_samples == 0:
+        if playback.audio is None:
             self._deliver(playback, tick, interrupted=False)
+            return self._frame(tick, b"", text)
+        pcm = playback.audio.pop_tick()
+        if playback.audio.pending_samples == 0:
+            playback.last_played_tick = tick
         return self._frame(tick, pcm, text)
 
     def is_finished(self) -> bool:

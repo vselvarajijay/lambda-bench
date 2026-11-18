@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 from lambda_duplex.adapters.base import (
@@ -134,10 +134,19 @@ class Orchestrator:
         self._append(source, event_type, data)
 
     def _check_audio(self, frame: MediaFrame, owner: str) -> None:
-        if self._tick_bytes is not None and len(frame.pcm) != self._tick_bytes:
+        if self._tick_bytes is None:
+            return
+        if len(frame.pcm) != self._tick_bytes:
             raise ValueError(
                 f"{owner} returned {len(frame.pcm)} audio bytes, expected {self._tick_bytes}"
             )
+        if frame.sample_rate != self._config.audio_sample_rate:
+            raise ValueError(
+                f"{owner} returned sample rate {frame.sample_rate}, "
+                f"expected {self._config.audio_sample_rate}"
+            )
+        if frame.clean_pcm is not None and len(frame.clean_pcm) != self._tick_bytes:
+            raise ValueError(f"{owner} returned clean audio with the wrong length")
 
     def _drain_suite_events(self) -> None:
         for event_type, origin, data in self._counterpart.drain_events():
@@ -170,14 +179,19 @@ class Orchestrator:
             incoming = await self._counterpart_turn(pending, tick)
             if incoming is None:
                 return "counterpart"
+            model_frame = incoming
+            if self._tick_bytes is not None:
+                model_frame = replace(incoming, text=None, clean_pcm=None)
             result = await asyncio.wait_for(
-                self._adapter.step(incoming, tick), self._config.step_timeout_s
+                self._adapter.step(model_frame, tick), self._config.step_timeout_s
             )
             if result.output.tick != tick:
                 raise ValueError(f"adapter returned tick {result.output.tick} during tick {tick}")
             self._check_audio(result.output, "adapter")
             if self._recorder is not None:
                 self._recorder.record(tick, incoming, result.output)
+            if result.truncated_ms > 0:
+                self._emit("model", "truncated", ms=result.truncated_ms)
             if result.output.text:
                 self._emit("model", "spoke", text=result.output.text)
             pending = result.output

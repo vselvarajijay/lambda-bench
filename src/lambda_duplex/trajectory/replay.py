@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,11 @@ class RecordedModel:
             if event.source == "model" and event.type == "spoke"
         }
         started = [e for e in events if e.source == "model" and e.type == "started"]
+        self._truncated = {
+            event.tick: event.data["ms"]
+            for event in events
+            if event.source == "model" and event.type == "truncated"
+        }
         self._session_id = started[0].data["session_id"] if started else "recorded"
         self._identity = stored.manifest["model"]
         self._steps = 0
@@ -56,7 +62,8 @@ class RecordedModel:
         start = tick * self._tick_bytes
         pcm = self._pcm[start : start + self._tick_bytes]
         rate = INTERNAL_SAMPLE_RATE if self._tick_bytes else None
-        return StepResult(MediaFrame(tick, pcm, rate, self._text.get(tick)))
+        frame = MediaFrame(tick, pcm, rate, self._text.get(tick))
+        return StepResult(frame, truncated_ms=self._truncated.get(tick, 0))
 
     async def stop(self) -> SessionSummary:
         return SessionSummary(self._steps)
@@ -83,6 +90,37 @@ def _first_difference(expected: list[dict[str, Any]], actual: list[dict[str, Any
     return f"event count differs: stored {len(expected)} replayed {len(actual)}"
 
 
+def _stored_tracks(path: Path, audio: Mapping[str, Any]) -> tuple[dict[str, bytes], list[str]]:
+    """Read every stored track and compare it with the manifest."""
+    from lambda_duplex.audio.pcm import sample_count
+    from lambda_duplex.audio.tracks import TRACK_NAMES, read_track
+
+    tracks: dict[str, bytes] = {}
+    problems: list[str] = []
+    for name in TRACK_NAMES:
+        details = audio["tracks"].get(name)
+        if details is None:
+            raise TrajectoryError(f"manifest has no {name} track")
+        file_path = path / "audio" / f"{name}.flac"
+        try:
+            if details["samples"] == 0:
+                if file_path.stat().st_size != 0:
+                    problems.append(f"{name} track should be empty")
+                tracks[name] = b""
+                continue
+            pcm, sample_rate = read_track(file_path)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise TrajectoryError(f"cannot read {file_path}: {error}") from error
+        tracks[name] = pcm
+        if sample_rate != audio["sample_rate"]:
+            problems.append(f"{name} track has sample rate {sample_rate}")
+        if sample_count(pcm) != details["samples"]:
+            problems.append(f"{name} track has the wrong length")
+        if hashlib.sha256(pcm).hexdigest() != details["sha256"]:
+            problems.append(f"{name} track differs from manifest")
+    return tracks, problems
+
+
 async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
     """Check that a stored run rescores and replays identically."""
     stored = load_run(path)
@@ -103,15 +141,13 @@ async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
     speech = None
     if audio is not None:
         from lambda_duplex.audio.synthetic import SyntheticSpeech
-        from lambda_duplex.audio.tracks import read_track
 
         if audio["backend"] != "synthetic":
             raise TrajectoryError(f"cannot replay audio backend {audio['backend']}")
         samples = MediaClock(settings["tick_ms"]).samples_per_tick(audio["sample_rate"])
-        pcm = read_track(path / "audio" / "model.flac")
-        if hashlib.sha256(pcm).hexdigest() != audio["tracks"]["model"]["sha256"]:
-            problems.append("model audio differs from manifest")
-        model = RecordedModel(stored, pcm, samples)
+        stored_tracks, track_problems = _stored_tracks(path, audio)
+        problems.extend(track_problems)
+        model = RecordedModel(stored, stored_tracks["model"], samples)
         speech = SyntheticSpeech(settings["seed"])
     replayed = await run_scenario(
         suite,
@@ -130,7 +166,7 @@ async def verify_run(path: Path, suite: Suite | None = None) -> VerifyReport:
         problems.append(_first_difference(stored_events, replay_events))
     if audio is not None and replayed.tracks is not None:
         for name, pcm in replayed.tracks.tracks().items():
-            if hashlib.sha256(pcm).hexdigest() != audio["tracks"][name]["sha256"]:
+            if pcm != stored_tracks[name]:
                 replay_ok = False
                 problems.append(f"{name} audio differs after replay")
     return VerifyReport(path, rescore_ok, replay_ok, tuple(problems))

@@ -30,7 +30,7 @@ class SyntheticSpeech:
         for harmonic in range(1, 9):
             phase = digest[harmonic] / 255 * 2 * np.pi
             signal += np.sin(2 * np.pi * pitch * harmonic * time + phase) / harmonic
-        envelope = np.sin(np.pi * np.arange(samples) / max(samples - 1, 1)) ** 0.5
+        envelope = np.clip(np.sin(np.pi * np.arange(samples) / max(samples - 1, 1)), 0, 1) ** 0.5
         result: np.ndarray = signal * envelope
         return result / max(float(np.max(np.abs(result))), 1e-9) * 0.35
 
